@@ -1,0 +1,186 @@
+{
+  "categories": {
+    "mail": {
+      "name": "📧 Buy Mail",
+      "emoji": "📧"
+    },
+    "vpn": {
+      "name": "🛡️ Buy VPN",
+      "emoji": "🛡️"
+    }
+  },
+  "vpn_durations": {
+    "03d": {
+      "name": "⚡ 03 Days"
+    },
+    "07d": {
+      "name": "🔥 07 Days"
+    },
+    "15d": {
+      "name": "💫 14 Days"
+    },
+    "30d": {
+      "name": "🚀 30 Days"
+    }
+  },
+  "products": {
+    "Outlook": {
+      "file": "outlook.xlsx",
+      "price": 0.75,
+      "duration": "06-12 Month",
+      "cat": "mail"
+    },
+    "Fr Outlook": {
+      "file": "froutlook.xlsx",
+      "price": 0.85,
+      "duration": "12-36 Month",
+      "cat": "mail"
+    },
+    "Edu Mail": {
+      "file": "edumail.xlsx",
+      "price": 2.0,
+      "duration": "Lifetime",
+      "cat": "mail"
+    },
+    "Hotmail": {
+      "file": "hotmail.xlsx",
+      "price": 0.75,
+      "duration": "06-12 Month",
+      "cat": "mail"
+    },
+    "Nord": {
+      "file": "nord.xlsx",
+      "price": 30.0,
+      "duration": "07 Days",
+      "cat": "vpn",
+      "vpn_dur": "07d"
+    },
+    "Proton": {
+      "file": "proton.xlsx",
+      "price": 50.0,
+      "duration": "14 Days",
+      "cat": "vpn",
+      "vpn_dur": "15d"
+    },
+    "Express": {
+      "file": "express.xlsx",
+      "price": 100.0,
+      "duration": "30 Days",
+      "cat": "vpn",
+      "vpn_dur": "30d"
+    },
+    "Cyberghost": {
+      "file": "cyberghost.xlsx",
+      "price": 15.0,
+      "duration": "03 Days",
+      "cat": "vpn",
+      "vpn_dur": "03d"
+    },
+    "Panda": {
+      "file": "panda.xlsx",
+      "price": 15.0,
+      "duration": "03 Days",
+      "cat": "vpn",
+      "vpn_dur": "03d"
+    },
+    "Vypr": {
+      "file": "vypr.xlsx",
+      "price": 15.0,
+      "duration": "03 Days",
+      "cat": "vpn",
+      "vpn_dur": "03d"
+    },
+    "IP Vanish": {
+      "file": "ip_vanish.xlsx",
+      "price": 25.0,
+      "duration": "07 Days",
+      "cat": "vpn",
+      "vpn_dur": "07d"
+    },
+    "HMA": {
+      "file": "hma.xlsx",
+      "price": 65.0,
+      "duration": "30 Days",
+      "cat": "vpn",
+      "vpn_dur": "30d"
+    },
+    "PIA": {
+      "file": "pia.xlsx",
+      "price": 25.0,
+      "duration": "07 Days",
+      "cat": "vpn",
+      "vpn_dur": "07d"
+    },
+    "Surfshark": {
+      "file": "surfshark.xlsx",
+      "price": 25.0,
+      "duration": "07 Days",
+      "cat": "vpn",
+      "vpn_dur": "07d"
+    },
+    "Hotspot Shield": {
+      "file": "hotspot_shield.xlsx",
+      "price": 25.0,
+      "duration": "07 Days",
+      "cat": "vpn",
+      "vpn_dur": "07d"
+    },
+    "Turbo": {
+      "file": "turbo.xlsx",
+      "price": 25.0,
+      "duration": "07 Days",
+      "cat": "vpn",
+      "vpn_dur": "07d"
+    },
+    "Pure": {
+      "file": "pure.xlsx",
+      "price": 25.0,
+      "duration": "07 Days",
+      "cat": "vpn",
+      "vpn_dur": "07d"
+    },
+    "Avast": {
+      "file": "avast.xlsx",
+      "price": 25.0,
+      "duration": "07 Days",
+      "cat": "vpn",
+      "vpn_dur": "07d"
+    },
+    "AVG": {
+      "file": "avg.xlsx",
+      "price": 25.0,
+      "duration": "07 Days",
+      "cat": "vpn",
+      "vpn_dur": "07d"
+    },
+    "Octohide": {
+      "file": "octohide.xlsx",
+      "price": 40.0,
+      "duration": "14 Days",
+      "cat": "vpn",
+      "vpn_dur": "15d"
+    },
+    "Symlex Vpn": {
+      "file": "symlex_vpn.xlsx",
+      "price": 40.0,
+      "duration": "14 Days",
+      "cat": "vpn",
+      "vpn_dur": "15d"
+    },
+    "Mysterium": {
+      "file": "mysterium.xlsx",
+      "price": 350.0,
+      "duration": "30 Days",
+      "cat": "vpn",
+      "vpn_dur": "30d"
+    },
+    "Nord #2": {
+      "name": "Nord",
+      "file": "nord.xlsx",
+      "price": 230.0,
+      "duration": "30 Days",
+      "cat": "vpn",
+      "vpn_dur": "30d"
+    }
+  }
+}

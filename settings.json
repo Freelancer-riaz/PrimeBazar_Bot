@@ -1,0 +1,59 @@
+{
+    "support_username": "@owner_of_pam",
+    "usd_rate": 127,
+    "welcome_photo_url": "",
+    "welcome_text": "",
+    "maintenance_mode": false,
+    "maintenance_message": "🔧 বট এখন রক্ষণাবেক্ষণে আছে। শীঘ্রই ফিরে আসছি!\n🔧 Bot is under maintenance. Coming back soon!",
+    "force_join_enabled": true,
+    "language_selection_enabled": true,
+    "deposit_enabled": true,
+    "daily_bonus_enabled": false,
+    "daily_bonus_amount": 2.0,
+    "force_join_channels": [
+        {
+            "username": "@prime_bazar_update",
+            "url": "https://t.me/prime_bazar_update",
+            "name": "Prime Bazar Update"
+        },
+        {
+            "username": "@primeaccmarket",
+            "url": "https://t.me/primeaccmarket",
+            "name": "Prime Acc Market"
+        }
+    ],
+    "payment_methods": {
+        "Bkash": "01848288111",
+        "Rocket": "01949037733",
+        "Binance": "PayID: 751370600 ($1 = 127 BDT)"
+    },
+    "supplier_bot_username": "@PremiumShopbd_bot",
+    "supplier_initial_cmd": "/start",
+    "supplier_vpn_button": "🛡️ Buy VPN",
+    "supplier_duration_buttons": {
+        "03d": "🛒 3 Days VPN",
+        "07d": "🛒 7 Days VPN",
+        "14d": "🛒 14 Days VPN",
+        "30d": "🛒 1 Month VPN",
+        "15d": "🛒 14 Days VPN"
+    },
+    "supplier_confirm_button": "✅ Confirm",
+    "supplier_stock_cmd": "/stock",
+    "supplier_buy_cmd": "/buy {product} {qty}",
+    "button_map": {},
+    "min_deposit_bdt": 20,
+    "min_deposit_usd": 1,
+    "btn_profile": "",
+    "btn_deposit": "",
+    "btn_shop": "",
+    "btn_price": "",
+    "btn_support": "",
+    "btn_daily": "",
+    "userbot_enabled": true,
+    "manual_delivery_vpns": [
+        "14 Days Proton",
+        "30 Days Nord",
+        "30 Days Mysterium",
+        "30 Days Express"
+    ]
+}
