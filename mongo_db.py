@@ -271,3 +271,31 @@ def db_delete_stock(p_name: str):
         _db()["mail_stock"].delete_one({"_id": p_name})
     except PyMongoError:
         pass
+
+
+# ─── Sold Mail Stock (used accounts — kept for admin used/fresh reports) ──────
+# Every row delivered to a buyer is appended here (tagged with buyer info and
+# timestamp) before being dropped from "mail_stock", so the admin can later
+# export which specific accounts were sold vs. which remain fresh.
+
+def db_append_sold(p_name: str, rows: list):
+    """Append newly sold rows to a product's sold-stock history."""
+    if not rows:
+        return
+    try:
+        _db()["sold_stock"].update_one(
+            {"_id": p_name},
+            {"$push": {"rows": {"$each": rows}}},
+            upsert=True,
+        )
+    except PyMongoError:
+        pass
+
+
+def db_load_sold(p_name: str) -> list:
+    """Load all sold rows for a product."""
+    try:
+        doc = _db()["sold_stock"].find_one({"_id": p_name})
+        return doc.get("rows", []) if doc else []
+    except PyMongoError:
+        return []

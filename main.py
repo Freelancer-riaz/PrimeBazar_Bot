@@ -31,6 +31,7 @@ from mongo_db import (
     db_load_manual_orders, db_save_manual_orders,
     db_load_all_users, db_save_one_user, db_save_all_users,
     db_load_stock, db_save_stock, db_append_stock, db_stock_count, db_delete_stock,
+    db_append_sold, db_load_sold,
 )
 
 try:
@@ -2162,6 +2163,21 @@ def _mail_execute(call, uid, p_name, qty, total, mode, S):
                          parse_mode="Markdown")
 
 
+def _record_sold_rows(p_name, sold_rows, uid):
+    """Tag delivered account rows with buyer/date metadata and archive them
+    in the 'sold_stock' collection so the admin can later export used vs.
+    fresh mail lists as .xlsx."""
+    if not sold_rows:
+        return
+    now = bst_now()
+    u   = get_user(uid)
+    tagged = [
+        {**row, "Buyer_UID": uid, "Buyer_Name": u.get("name", "?"), "Sold_Date": now}
+        for row in sold_rows
+    ]
+    db_append_sold(p_name, tagged)
+
+
 def _deliver_mail_text(uid, p_name, qty, total, S):
     """Retail delivery: read Column A, send as text (one account per line).
     Stock is stored in MongoDB, not a local file, so it survives Railway restarts."""
@@ -2175,6 +2191,7 @@ def _deliver_mail_text(uid, p_name, qty, total, S):
     to_send   = available[:qty]
     remaining = rows[qty:]
     db_save_stock(p_name, remaining)
+    _record_sold_rows(p_name, rows[:qty], uid)
     accounts_text = "\n".join(f"`{str(a)}`" for a in to_send)
     msg = (
         f"✅ *Purchase Successful!*\n"
@@ -2195,6 +2212,7 @@ def _deliver_mail_xlsx(uid, p_name, qty, total, S):
     to_send   = rows[:qty]
     remaining = rows[qty:]
     db_save_stock(p_name, remaining)
+    _record_sold_rows(p_name, to_send, uid)
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine="openpyxl") as writer:
         pd.DataFrame(to_send).to_excel(writer, index=False)
@@ -3126,6 +3144,9 @@ def admin_panel_markup():
         types.InlineKeyboardButton("👥 User Manager",    callback_data="adm|users"),
     )
     mk.add(
+        types.InlineKeyboardButton("📊 Mail Report (Used/Fresh)", callback_data="adm|mailreport"),
+    )
+    mk.add(
         types.InlineKeyboardButton("📊 Stats",           callback_data="adm|stats"),
         types.InlineKeyboardButton("🎨 Branding",        callback_data="adm|branding"),
     )
@@ -3197,6 +3218,7 @@ def admin_router(call):
         "userbot":       _adm_userbot,
         "btnlabels":     _adm_btnlabels,
         "manual_orders": _adm_manual_orders,
+        "mailreport":    _adm_mailreport_select,
     }.get(action, lambda _: None)(call)
 
     if action == "addstock":
@@ -3320,6 +3342,59 @@ def _adm_syncstock(call):
     mk = types.InlineKeyboardMarkup()
     mk.add(types.InlineKeyboardButton("🔙 Admin Panel", callback_data="adm|back"))
     bot.send_message(ADMIN_ID, report, reply_markup=mk, parse_mode="Markdown")
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  📊 Mail Report — Used (sold) vs Fresh (remaining) accounts as .xlsx
+# ─────────────────────────────────────────────────────────────────────
+def _adm_mailreport_select(call):
+    """List mail products (non-VPN) so admin can pick which one to report on."""
+    prods = {p: info for p, info in get_products().items() if info.get("cat") != "vpn"}
+    if not prods:
+        bot.send_message(ADMIN_ID, "❌ কোনো মেইল প্রোডাক্ট পাওয়া যায়নি।"); return
+    mk = types.InlineKeyboardMarkup(row_width=1)
+    for p in prods:
+        fresh = get_stock_count(p)
+        used  = len(db_load_sold(p))
+        mk.add(types.InlineKeyboardButton(
+            f"📧 {p}  (Fresh: {fresh} | Used: {used})", callback_data=f"mrep|{p}"))
+    mk.add(types.InlineKeyboardButton("🔙 Admin Panel", callback_data="adm|back"))
+    bot.send_message(ADMIN_ID, "📊 কোন প্রোডাক্টের রিপোর্ট দেখতে চান?", reply_markup=mk)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("mrep|"))
+def _adm_mailreport_kind(call):
+    if call.message.chat.id != ADMIN_ID: return
+    p_name = call.data.split("|", 1)[1]
+    fresh  = get_stock_count(p_name)
+    used   = len(db_load_sold(p_name))
+    mk = types.InlineKeyboardMarkup(row_width=1)
+    mk.add(types.InlineKeyboardButton(f"📥 Fresh Mails ({fresh}) — .xlsx", callback_data=f"mrepf|fresh|{p_name}"))
+    mk.add(types.InlineKeyboardButton(f"✅ Used Mails ({used}) — .xlsx",  callback_data=f"mrepf|used|{p_name}"))
+    mk.add(types.InlineKeyboardButton("🔙 Back", callback_data="adm|mailreport"))
+    bot.answer_callback_query(call.id)
+    bot.send_message(ADMIN_ID, f"📧 *{p_name}*\nFresh: *{fresh}* | Used: *{used}*",
+                     reply_markup=mk, parse_mode="Markdown")
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("mrepf|"))
+def _adm_mailreport_send(call):
+    if call.message.chat.id != ADMIN_ID: return
+    _, kind, p_name = call.data.split("|", 2)
+    rows = _load_stock_rows(p_name) if kind == "fresh" else db_load_sold(p_name)
+    bot.answer_callback_query(call.id)
+    if not rows:
+        bot.send_message(ADMIN_ID, f"❌ *{p_name}* — {'ফ্রেশ' if kind=='fresh' else 'ইউজড'} মেইল নেই।",
+                         parse_mode="Markdown"); return
+    out = io.BytesIO()
+    with pd.ExcelWriter(out, engine="openpyxl") as writer:
+        pd.DataFrame(rows).to_excel(writer, index=False)
+    out.seek(0)
+    label = "Fresh" if kind == "fresh" else "Used"
+    fname = f"{p_name.replace(' ', '_')}_{label}_{len(rows)}.xlsx"
+    bot.send_document(ADMIN_ID, out, visible_file_name=fname,
+                      caption=f"📊 *{p_name}* — {label} mails: *{len(rows)}* পিস",
+                      parse_mode="Markdown")
 
 
 # ─────────────────────────────────────────────────────────────────────
