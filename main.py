@@ -921,6 +921,42 @@ def _is_from_supplier(message) -> bool:
     return sender_un == supplier_raw or sender_id == supplier_raw
 
 
+def _safe_text(msg) -> str:
+    """
+    Safely extract text/caption from a Pyrogram message.
+
+    Pyrogram represents `.text`/`.caption` with a custom `Str` type that
+    re-splits the string by UTF-16 surrogate pairs on *every* slice/index
+    operation (Telegram entity offsets are UTF-16-based). Supplier replies
+    are emoji-heavy, and slicing that `Str` (e.g. `text[:200]` for logging)
+    can land in the middle of a surrogate pair and raise:
+        UnicodeDecodeError: 'utf-16-le' codec can't decode bytes...
+    Converting to a plain built-in `str` immediately drops the custom
+    slicing behaviour, so all later slicing/regex is safe. We also guard
+    the attribute access itself in case Pyrogram's own entity parsing hit
+    the same bug while building the message.
+    """
+    for attr in ("text", "caption"):
+        try:
+            val = getattr(msg, attr, None)
+            if val:
+                return str(val)  # plain str -> normal (safe) slicing from here on
+        except UnicodeDecodeError as e:
+            print(f"[Encoding] Failed to decode supplier message .{attr} ({e}); skipping this field.")
+            continue
+        except Exception:
+            continue
+    return ""
+
+
+def _safe_slice(text: str, limit: int) -> str:
+    """Truncate a plain str for logging without ever raising (belt-and-braces)."""
+    try:
+        return str(text)[:limit]
+    except Exception:
+        return ""
+
+
 def _clean_text(t: str) -> str:
     """
     Normalize text for robust button matching:
@@ -1027,8 +1063,8 @@ async def _nav_wait_response(timeout: float = 5, require_keyboard: bool = True):
             if not require_keyboard:
                 return msg  # accept any message
             # Plain text — return only if it looks like credentials
-            text = (msg.text or msg.caption or "").lower()
-            if any(k in text for k in ("mail", "email", "pass", "pwd", "account", "@")):
+            text = _safe_text(msg).lower()
+            if any(k in text for k in ("mail", "email", "pass", "pwd", "account", "@", ":")):
                 return msg
             # Save as fallback but keep draining for a keyboard message
             last_plain = msg
@@ -1059,6 +1095,7 @@ async def _click_button(client, message, btn_text: str, timeout: float = 5):
         return None, "not_found"
 
     _r, _c, actual_text, kb_type = result
+    actual_text = str(actual_text)  # plain str -> avoid Pyrogram's surrogate-slicing Str type
     supplier = cfg("supplier_bot_username")
 
     try:
@@ -1252,31 +1289,60 @@ async def _vpn_buy_nav_async(product_name: str, dur_key: str, qty: int):
             print(f"[NAV] ✓ Confirm clicked — parsing delivery")
 
             # ── Step 6: Extract credentials ────────────────────────
-            raw = delivery_msg.text or delivery_msg.caption or ""
-            print(f"[NAV] Delivery raw text: {raw[:200]}")
-            # Flexible regex — handles emojis and varied label styles
-            mail_m = re.search(
-                r"(?:mail|email|user(?:name)?|id)\s*[:\-|➤→✉️📧]*\s*([a-zA-Z0-9_.+\-]+@[^\s\n,|]+)",
-                raw, re.IGNORECASE)
-            pass_m = re.search(
-                r"(?:pass(?:word)?|passwd|pwd|key|🔑)\s*[:\-|➤→🔑]*\s*([^\s\n,|]{4,})",
-                raw, re.IGNORECASE)
-            # Fallback 1: bare email anywhere in text
-            if not mail_m:
-                mail_m = re.search(
-                    r"([a-zA-Z0-9_.+\-]+@[a-zA-Z0-9\-]+\.[a-zA-Z]{2,})", raw)
-            # Fallback 2: last standalone word ≥6 chars on a "pass-like" line
-            if not pass_m:
-                for line in raw.splitlines():
-                    if re.search(r"pass|pwd|key|🔑", line, re.IGNORECASE):
-                        tok = re.findall(r"\S{4,}", line)
-                        if tok:
-                            class _M:
-                                def group(self, _): return tok[-1]
-                            pass_m = _M()
-                            break
-            mail = mail_m.group(1) if mail_m else "—"
-            pw   = pass_m.group(1) if pass_m else "—"
+            raw = _safe_text(delivery_msg)
+            print(f"[NAV] Delivery raw text: {_safe_slice(raw, 200)}")
+
+            def _extract_creds(text: str):
+                """Try to find (email, password) in a block of text. Returns (mail_m, pass_m)."""
+                mail = re.search(
+                    r"(?:mail|email|user(?:name)?|id)\s*[:\-|➤→✉️📧]*\s*([a-zA-Z0-9_.+\-]+@[^\s\n,|]+)",
+                    text, re.IGNORECASE)
+                pw = re.search(
+                    r"(?:pass(?:word)?|passwd|pwd|key|🔑)\s*[:\-|➤→🔑]*\s*([^\s\n,|]{4,})",
+                    text, re.IGNORECASE)
+                if not mail:
+                    mail = re.search(
+                        r"([a-zA-Z0-9_.+\-]+@[a-zA-Z0-9\-]+\.[a-zA-Z]{2,})", text)
+                if not pw:
+                    for line in text.splitlines():
+                        if re.search(r"pass|pwd|key|🔑", line, re.IGNORECASE):
+                            tok = re.findall(r"\S{4,}", line)
+                            if tok:
+                                pw = tok[-1]
+                                break
+                    else:
+                        pw = None
+                else:
+                    pw = pw.group(1)
+                return (mail.group(1) if mail else None), pw
+
+            mail, pw = _extract_creds(raw)
+
+            # The supplier sometimes confirms the order first ("Order completed")
+            # and sends the actual Mail/Pass in a *second*, separate message a
+            # moment later. If credentials are still missing, keep listening on
+            # the supplier queue briefly for a follow-up message and merge it in.
+            if not mail or not pw:
+                extra_wait_deadline = asyncio.get_running_loop().time() + 8.0
+                while (not mail or not pw) and asyncio.get_running_loop().time() < extra_wait_deadline:
+                    remaining = extra_wait_deadline - asyncio.get_running_loop().time()
+                    if remaining <= 0:
+                        break
+                    try:
+                        _kind, follow_msg = await asyncio.wait_for(_supplier_queue.get(), timeout=remaining)
+                    except asyncio.TimeoutError:
+                        break
+                    follow_text = _safe_text(follow_msg)
+                    if not follow_text:
+                        continue
+                    print(f"[NAV] Follow-up supplier message: {_safe_slice(follow_text, 200)}")
+                    f_mail, f_pw = _extract_creds(follow_text)
+                    mail = mail or f_mail
+                    pw   = pw or f_pw
+                    raw  = raw + "\n" + follow_text
+
+            mail = mail or "—"
+            pw   = pw or "—"
             print(f"[NAV] ✓ Parsed — mail={mail}  pass={'***' if pw != '—' else '—'}")
             credentials.append((mail, pw))
 
@@ -1297,9 +1363,17 @@ async def _userbot_send_wait(command: str, timeout: float = 35) -> "str | None":
     _pyro_pending[req_id] = fut
     try:
         await _userbot.send_message(supplier, command)
-        return await asyncio.wait_for(asyncio.shield(fut), timeout=timeout)
+        result = await asyncio.wait_for(asyncio.shield(fut), timeout=timeout)
+        return str(result) if result else result  # force plain str (safe slicing downstream)
     except asyncio.TimeoutError:
         _pyro_pending.pop(req_id, None)
+        return None
+    except UnicodeDecodeError as e:
+        # Pyrogram's UTF-16 surrogate-pair handling can choke on emoji-heavy
+        # supplier replies. Don't let that kill the whole request — log and
+        # treat it the same as "no usable reply".
+        _pyro_pending.pop(req_id, None)
+        print(f"_userbot_send_wait encoding error (ignored): {e}")
         return None
     except Exception as e:
         _pyro_pending.pop(req_id, None)
@@ -1312,7 +1386,7 @@ async def _check_supplier_balance_async() -> "float | None":
     Two-step balance check:
       1. Send /start  → supplier sends main menu (with ✨ Balance button)
       2. Send '✨ Balance' → supplier replies with account info containing balance
-      3. Parse 'Balance: XX BDT' from the reply
+      3. Parse the balance amount from the reply (label-based, or number + currency unit)
     """
     if not _userbot or not cfg("supplier_bot_username"):
         return None
@@ -1324,13 +1398,20 @@ async def _check_supplier_balance_async() -> "float | None":
         response = await _userbot_send_wait("✨ Balance", timeout=20)
         if not response:
             return None
-        print(f"[BalCheck] raw reply: {response[:200]}")
+        response = str(response)  # plain str -> safe slicing, no UTF-16 surrogate bug
+        print(f"[BalCheck] raw reply: {_safe_slice(response, 200)}")
         # Parse e.g. "💎✨ Balance: 10 BDT" or "Balance: 250.5 BDT"
         m = re.search(
-            r"balance\s*[:\-]\s*(\d+(?:\.\d+)?)",
+            r"balance\s*[:\-]?\s*(\d+(?:\.\d+)?)\s*(?:BDT|TK|Tk|Taka|৳)?",
             response, re.IGNORECASE)
+        if not m:
+            # Fallback: a bare number followed directly by a currency unit,
+            # e.g. "10 BDT" / "250.5 Tk" without the word "Balance" at all.
+            m = re.search(r"(\d+(?:\.\d+)?)\s*(?:BDT|TK|Tk|৳)", response, re.IGNORECASE)
         if m:
             return float(m.group(1))
+    except UnicodeDecodeError as e:
+        print(f"[BalCheck] encoding error (ignored): {e}")
     except Exception as e:
         print(f"[BalCheck] error: {e}")
     return None
@@ -1345,6 +1426,7 @@ async def _sync_stock_async():
     response = await _userbot_send_wait(cmd)
     if not response:
         return None, None
+    response = str(response)  # plain str -> safe slicing downstream
     updates: dict = {}
     for name, count in re.findall(
             r"([^\n:|\-]+)[:\-|]\s*(\d+)\s*(?:pcs|pc|pieces|left|available)?",
@@ -1385,13 +1467,16 @@ async def _pyro_main():
         async def _on_msg(client, message):
             if not _is_from_supplier(message):
                 return
+            # Debug: always log the raw supplier message so encoding/parsing
+            # issues are visible in the logs (safe — never raises).
+            print(f"Supplier Raw Message: {_safe_slice(_safe_text(message), 500)}")
             # Feed navigation queue
             if _supplier_queue is not None:
                 await _supplier_queue.put(("new", message))
             # Also resolve legacy text-command futures (stock sync)
             for req_id, fut in list(_pyro_pending.items()):
                 if not fut.done():
-                    fut.set_result(message.text or message.caption or "")
+                    fut.set_result(_safe_text(message))
                     _pyro_pending.pop(req_id, None)
                     break
 
