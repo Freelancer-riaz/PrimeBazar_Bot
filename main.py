@@ -2131,14 +2131,14 @@ def _mail_execute(call, uid, p_name, qty, total, mode, S):
         user_data[uid]["last_purchase_time"] = now
         save_data(user_data)
         u       = get_user(uid)
-        new_bal = round(u["balance"] - total, 2)
+        new_bal = round(u["balance"], 2)
         try:
             bot.send_message(ADMIN_ID,
                 f"✅ *New Mail Sale!*\n✨━━━━━━━━━━━━✨\n"
                 f"👤 User: `{uid}`\n📧 Product: *{p_name}*\n"
                 f"🔢 Qty: {qty} | Mode: {mode}\n"
                 f"💸 Amount: *{total} BDT*\n"
-                f"💰 Remaining: {new_bal} BDT\n🕐 Time: {now}",
+                f"💰 Remaining Balance: {new_bal} BDT\n🕐 Time: {now}",
                 parse_mode="Markdown")
         except Exception: pass
         stock = get_stock_count(p_name)
@@ -2363,7 +2363,7 @@ def finalize_order(call):
         save_data(user_data)
         # Admin success notification
         u = get_user(uid)
-        new_bal = round(u["balance"] - total, 2)
+        new_bal = round(u["balance"], 2)
         try:
             bot.send_message(ADMIN_ID,
                 f"✅ *New Sale!*\n"
@@ -3129,53 +3129,66 @@ _ADMIN_PANEL_TXT = (
     "✨━━━━━━━━━━━━━━━━━━✨"
 )
 
+def _adm_section(mk, title):
+    """Full-width, non-clickable section header for visual grouping."""
+    mk.add(types.InlineKeyboardButton(f"▬▬▬▬▬  {title}  ▬▬▬▬▬", callback_data="adm|noop"))
+
+
 def admin_panel_markup():
     mk = types.InlineKeyboardMarkup(row_width=2)
+
+    _adm_section(mk, "🛍️ CATALOG")
     mk.add(
         types.InlineKeyboardButton("📦 Categories",      callback_data="adm|cats"),
         types.InlineKeyboardButton("🛍️ Products",        callback_data="adm|prods"),
     )
     mk.add(
         types.InlineKeyboardButton("🛡️ VPN Durations",   callback_data="adm|vpndurs"),
+        types.InlineKeyboardButton("🎟️ Coupons",         callback_data="adm|coupons"),
+    )
+
+    _adm_section(mk, "📦 STOCK")
+    mk.add(
         types.InlineKeyboardButton("➕ Add Stock",       callback_data="adm|addstock"),
-    )
-    mk.add(
         types.InlineKeyboardButton("🔄 Sync Stock",      callback_data="adm|syncstock"),
-        types.InlineKeyboardButton("👥 User Manager",    callback_data="adm|users"),
     )
     mk.add(
-        types.InlineKeyboardButton("📊 Mail Report (Used/Fresh)", callback_data="adm|mailreport"),
+        types.InlineKeyboardButton("📊 Mail Report",     callback_data="adm|mailreport"),
     )
+
+    _adm_section(mk, "👥 USERS & ORDERS")
+    manual_cnt = len(_pending_manual_orders)
+    mk.add(
+        types.InlineKeyboardButton("👥 User Manager",    callback_data="adm|users"),
+        types.InlineKeyboardButton(
+            f"📋 Manual Orders ({manual_cnt})" if manual_cnt else "📋 Manual Orders",
+            callback_data="adm|manual_orders"
+        ),
+    )
+
+    _adm_section(mk, "📊 ANALYTICS & SETTINGS")
     mk.add(
         types.InlineKeyboardButton("📊 Stats",           callback_data="adm|stats"),
         types.InlineKeyboardButton("🎨 Branding",        callback_data="adm|branding"),
     )
     mk.add(
         types.InlineKeyboardButton("🔘 Button Labels",   callback_data="adm|btnlabels"),
-    )
-    mk.add(
         types.InlineKeyboardButton("⚙️ Global Config",   callback_data="adm|config"),
+    )
+    mk.add(
         types.InlineKeyboardButton("🔀 Feature Toggles", callback_data="adm|toggles"),
-    )
-    manual_cnt = len(_pending_manual_orders)
-    mk.add(
         types.InlineKeyboardButton("🤖 Userbot Config",  callback_data="adm|userbot"),
-        types.InlineKeyboardButton("🎟️ Coupons",         callback_data="adm|coupons"),
     )
-    mk.add(
-        types.InlineKeyboardButton(
-            f"📋 Manual Orders ({manual_cnt})" if manual_cnt else "📋 Manual Orders",
-            callback_data="adm|manual_orders"
-        ),
-    )
+
+    _adm_section(mk, "⚙️ SYSTEM")
     dep_on = cfg("deposit_enabled") is not False
     mk.add(
         types.InlineKeyboardButton("📢 Broadcast",       callback_data="adm|broadcast"),
-        types.InlineKeyboardButton("💾 Backup DB",       callback_data="adm|backup"),
-    )
-    mk.add(
         types.InlineKeyboardButton(f"{'✅' if dep_on else '❌'} Deposit System",
                                    callback_data="adm|dep_toggle"),
+    )
+    mk.add(
+        types.InlineKeyboardButton("💾 Backup DB",       callback_data="adm|backup"),
         types.InlineKeyboardButton("📥 Restore DB",      callback_data="adm|restore"),
     )
     if _REPLIT_DOMAIN:
