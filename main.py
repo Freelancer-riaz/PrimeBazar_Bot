@@ -1850,20 +1850,55 @@ def toggle_photo(call):
 #  PRICE LIST
 # ═══════════════════════════════════════════════
 @bot.message_handler(func=lambda m: m.text in _btn_labels("btn_price"))
+def _duration_sort_key(dur_str: str):
+    """Parse a free-text duration ('1 Month', '7 Days', '12-36 Month',
+    'Lifetime') into a sortable (bucket, days) tuple so shorter durations
+    always come before longer ones, with 'Lifetime'/unlimited last."""
+    if not dur_str:
+        return (0, 0.0)
+    s = dur_str.strip().lower()
+    if "lifetime" in s or "unlimited" in s:
+        return (2, 0.0)
+    nums = re.findall(r"\d+\.?\d*", s)
+    n = float(nums[0]) if nums else 0.0
+    if "year" in s:
+        mult = 365
+    elif "month" in s:
+        mult = 30
+    elif "week" in s:
+        mult = 7
+    elif "hour" in s:
+        mult = 1 / 24
+    elif "day" in s:
+        mult = 1
+    else:
+        mult = 30
+    return (1, n * mult)
+
+
 def price_list(message):
     if not guard(message): return
     uid  = str(message.chat.id)
     lang = get_lang(uid)
     S    = STRINGS.get(lang, STRINGS["bn"])
     cats = get_categories(); prods = get_products()
-    txt  = S.get("price_title", "💎 *PRICE LIST*\n✨━━━━━━━━━━━━✨") + "\n"
+    txt  = S.get("price_title", "💎 *PRICE LIST*") + "\n✨━━━━━━━━━━━━━━━━━━✨\n"
     for cat_key, cat_info in cats.items():
+        cat_items = [(p_name, p_info) for p_name, p_info in prods.items()
+                     if p_info.get("cat") == cat_key]
+        if not cat_items:
+            continue
+        # Shortest duration first, then cheapest price first for equal durations
+        cat_items.sort(key=lambda item: (
+            _duration_sort_key(item[1].get("duration", "")),
+            item[1].get("price", 0),
+        ))
         txt += f"\n{cat_info.get('emoji','')} *{cat_info['name']}*\n"
-        for p_name, p_info in prods.items():
-            if p_info.get("cat") == cat_key:
-                dur = f" ({p_info['duration']})" if p_info.get("duration") else ""
-                txt += f"  • {p_name}{dur} — *{p_info.get('price',0)} BDT*\n"
-    txt += f"\n{S.get('price_rate','💵 *Binance Rate:* $1 = {{rate}} BDT').format(rate=USD_RATE())}"
+        txt += "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
+        for idx, (p_name, p_info) in enumerate(cat_items, 1):
+            dur = f" _{p_info['duration']}_" if p_info.get("duration") else ""
+            txt += f"  `{idx:>2}.` *{p_name}*{dur} — 💵 *{p_info.get('price',0)} BDT*\n"
+    txt += f"\n✨━━━━━━━━━━━━━━━━━━✨\n{S.get('price_rate','💵 *Binance Rate:* $1 = {{rate}} BDT').format(rate=USD_RATE())}"
     bot.send_message(message.chat.id, txt, parse_mode="Markdown")
 
 
@@ -4361,15 +4396,17 @@ def feature_toggle(call):
 #  Coupon Manager
 # ─────────────────────────────────────────────
 def _adm_manual_orders(call):
-    """Admin panel — list all pending manual VPN deliveries."""
+    """Admin panel — list all pending manual VPN deliveries with Send/Reject actions."""
     orders = _pending_manual_orders
-    mk = types.InlineKeyboardMarkup(row_width=1)
+    mk = types.InlineKeyboardMarkup(row_width=2)
     if orders:
         for uid, o in list(orders.items()):
             u_name = o.get("user_name", "?")
             d_name = o.get("d_name", "?")
-            label  = f"📨 {u_name} — {d_name}"
-            mk.add(types.InlineKeyboardButton(label, callback_data=f"adm_send_vpn|{uid}"))
+            mk.add(
+                types.InlineKeyboardButton(f"📨 Send · {u_name}", callback_data=f"adm_send_vpn|{uid}"),
+                types.InlineKeyboardButton(f"❌ Reject · {u_name}", callback_data=f"adm_reject_vpn|{uid}"),
+            )
     else:
         mk.add(types.InlineKeyboardButton("✅ কোনো pending order নেই", callback_data="noop"))
     mk.add(types.InlineKeyboardButton("🔙 Back", callback_data="adm|back"))
@@ -4384,12 +4421,75 @@ def _adm_manual_orders(call):
             f"   🛡️ {o.get('d_name','?')} | ⏳ {o.get('duration','?')}\n"
             f"   💰 {o.get('total','?')} BDT | 🕐 {o.get('time','?')}\n\n"
         )
-    txt += "✨━━━━━━━━━━━━━━━━━━✨\n_একটি অর্ডারে ক্লিক করে VPN পাঠান।_"
+    txt += "✨━━━━━━━━━━━━━━━━━━✨\n_Send করে VPN দিন, বা ভুল/স্প্যাম অর্ডার হলে Reject করুন (টাকা রিফান্ড হয়ে যাবে)।_"
     try:
         bot.edit_message_text(txt, ADMIN_ID, call.message.message_id,
                               reply_markup=mk, parse_mode="Markdown")
     except Exception:
         bot.send_message(ADMIN_ID, txt, reply_markup=mk, parse_mode="Markdown")
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("adm_reject_vpn|"))
+def adm_reject_vpn_confirm(call):
+    """Admin clicks 'Reject' on a manual order — ask for confirmation first."""
+    if call.message.chat.id != ADMIN_ID: return
+    target_uid = call.data.split("|")[1]
+    order = _pending_manual_orders.get(target_uid)
+    bot.answer_callback_query(call.id)
+    if not order:
+        bot.send_message(ADMIN_ID, "❌ এই অর্ডারটি আর নেই (আগেই প্রসেস হয়ে গেছে)।"); return
+    mk = types.InlineKeyboardMarkup(row_width=1)
+    mk.add(
+        types.InlineKeyboardButton("✅ হ্যাঁ, Reject করে রিফান্ড দিন", callback_data=f"adm_reject_ok|{target_uid}"),
+        types.InlineKeyboardButton("🔙 না, ফিরে যান", callback_data="adm|manual_orders"),
+    )
+    bot.send_message(
+        ADMIN_ID,
+        f"⚠️ *Reject Confirmation*\n"
+        f"✨━━━━━━━━━━━━━━━━━━✨\n"
+        f"👤 User: `{target_uid}` — {order.get('user_name','?')}\n"
+        f"🛡️ Product: *{order.get('d_name','?')}* | ⏳ {order.get('duration','?')}\n"
+        f"💰 Amount: *{order.get('total','?')} BDT*\n"
+        f"✨━━━━━━━━━━━━━━━━━━✨\n"
+        f"এই অর্ডারটি Reject করলে ইউজারকে *{order.get('total','?')} BDT* রিফান্ড করে দেওয়া হবে। নিশ্চিত?",
+        reply_markup=mk, parse_mode="Markdown")
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("adm_reject_ok|"))
+def adm_reject_vpn_do(call):
+    """Admin confirmed reject — refund balance, notify user, drop the pending order."""
+    if call.message.chat.id != ADMIN_ID: return
+    target_uid = call.data.split("|")[1]
+    bot.answer_callback_query(call.id)
+    order = _pending_manual_orders.pop(target_uid, None)
+    _save_manual_orders(_pending_manual_orders)
+    if not order:
+        bot.send_message(ADMIN_ID, "❌ এই অর্ডারটি আর নেই (আগেই প্রসেস হয়ে গেছে)।"); return
+    total = order.get("total", 0)
+    try:
+        update_user(target_uid, "balance", total)
+    except Exception:
+        pass
+    new_bal = round(get_user(target_uid).get("balance", 0), 2)
+    try:
+        bot.send_message(
+            target_uid,
+            f"❌ *আপনার অর্ডারটি বাতিল করা হয়েছে!*\n"
+            f"✨━━━━━━━━━━━━━━━━━━✨\n"
+            f"🛡️ Product: *{order.get('d_name','?')}* | ⏳ {order.get('duration','?')}\n"
+            f"💰 Refunded: *{total} BDT*\n"
+            f"💳 Current Balance: *{new_bal} BDT*\n"
+            f"✨━━━━━━━━━━━━━━━━━━✨\n"
+            f"কোনো সমস্যা মনে হলে Support-এ যোগাযোগ করুন।",
+            parse_mode="Markdown")
+    except Exception:
+        pass
+    bot.send_message(
+        ADMIN_ID,
+        f"✅ *Order Rejected & Refunded!*\n"
+        f"👤 User `{target_uid}` কে *{total} BDT* রিফান্ড করা হয়েছে।\n"
+        f"💳 New Balance: *{new_bal} BDT*",
+        parse_mode="Markdown")
 
 
 def _adm_coupons(call):
