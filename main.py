@@ -1849,7 +1849,6 @@ def toggle_photo(call):
 # ═══════════════════════════════════════════════
 #  PRICE LIST
 # ═══════════════════════════════════════════════
-@bot.message_handler(func=lambda m: m.text in _btn_labels("btn_price"))
 def _duration_sort_key(dur_str: str):
     """Parse a free-text duration ('1 Month', '7 Days', '12-36 Month',
     'Lifetime') into a sortable (bucket, days) tuple so shorter durations
@@ -1876,6 +1875,7 @@ def _duration_sort_key(dur_str: str):
     return (1, n * mult)
 
 
+@bot.message_handler(func=lambda m: m.text in _btn_labels("btn_price"))
 def price_list(message):
     if not guard(message): return
     uid  = str(message.chat.id)
