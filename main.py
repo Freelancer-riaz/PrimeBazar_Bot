@@ -565,7 +565,7 @@ _SETTINGS_DEFAULTS = {
     "payment_methods": {
         "Bkash":   "01848288111",
         "Rocket":  "01949037733",
-        "Binance": "PayID: 751370600 ($1 = 127 BDT)",
+        "Binance": "PayID: 751370600",
     },
     # ── Supplier Bot (Navigation-based) ──────────────────────────
     "supplier_bot_username":      "",
@@ -2839,9 +2839,14 @@ def deposit_menu(message):
     S       = STRINGS.get(get_lang(uid), STRINGS["bn"])
     methods = list(PAYMENT_METHODS().keys())
     mk      = types.InlineKeyboardMarkup(row_width=2)
-    btns    = [types.InlineKeyboardButton(f"💳 {m}", callback_data=f"dep|{m}") for m in methods]
+    _method_icon = {"bkash": "📱", "rocket": "🚀", "nagad": "🟠", "binance": "🌐"}
+    btns = [
+        types.InlineKeyboardButton(
+            f"{_method_icon.get(m.lower(), '💳')} {m}", callback_data=f"dep|{m}")
+        for m in methods
+    ]
     if btns: mk.add(*btns)
-    caption = S.get("deposit_select","💳 *Select Payment Method:*")
+    caption = S.get("deposit_select", "💳 *Select a Payment Method*")
     bot.send_message(message.chat.id, caption, reply_markup=mk, parse_mode="Markdown")
 
 
@@ -2853,9 +2858,13 @@ def get_dep_amount(call):
     min_bdt = cfg("min_deposit_bdt") or 20
     min_usd = cfg("min_deposit_usd") or 1
     if method == "Binance":
-        msg = bot.send_message(call.message.chat.id, S.get("dep_ask_usd",f"💵 Amount in USD (min ${min_usd}):").format(min_usd=min_usd), parse_mode="Markdown")
+        msg = bot.send_message(call.message.chat.id,
+            S.get("dep_ask_usd", "💵 *How much would you like to deposit?*\n🔹 Minimum: *${min_usd}*").format(min_usd=min_usd),
+            parse_mode="Markdown")
     else:
-        msg = bot.send_message(call.message.chat.id, S.get("dep_ask_bdt",f"৳ Amount in BDT (min {min_bdt} BDT):").format(min_bdt=min_bdt), parse_mode="Markdown")
+        msg = bot.send_message(call.message.chat.id,
+            S.get("dep_ask_bdt", "৳ *How much would you like to send?*\n🔹 Minimum: *{min_bdt} BDT*").format(min_bdt=min_bdt),
+            parse_mode="Markdown")
     bot.register_next_step_handler(msg, process_deposit, method)
     bot.answer_callback_query(call.id)
 
@@ -2871,7 +2880,9 @@ def process_deposit(message, method):
     min_usd = cfg("min_deposit_usd") or 1
     if method == "Binance":
         if amount_input < min_usd:
-            bot.send_message(message.chat.id, f"❌ Minimum ${min_usd}.", parse_mode="Markdown"); return
+            bot.send_message(message.chat.id,
+                S.get("dep_min_usd", "❌ *Minimum deposit via Binance is ${min_usd}.*").format(min_usd=min_usd),
+                parse_mode="Markdown"); return
         bdt_amount = round(amount_input * USD_RATE(), 2)
         msg = bot.send_message(message.chat.id,
             S.get("dep_binance_info","✅ *Our Binance:* `{num}`\n💵 ${usd} = {bdt} BDT\n📩 Send Order ID:").format(
@@ -2879,20 +2890,46 @@ def process_deposit(message, method):
         bot.register_next_step_handler(msg, alert_admin, bdt_amount, method, amount_input)
     else:
         if amount_input < min_bdt:
-            bot.send_message(message.chat.id, f"❌ Minimum {min_bdt} BDT.", parse_mode="Markdown"); return
-        msg = bot.send_message(message.chat.id,
-            (
-                f"💳 *{method} Deposit*\n"
-                "✨━━━━━━━━━━━━━━━━━━✨\n"
-                f"📲 নিচের নম্বরে টাকা পাঠান:\n"
-                f"☎️ Number: `{num}`\n\n"
-                "🔴 *গুরুত্বপূর্ণ নির্দেশনা:*\n"
-                "✅ অবশ্যই *SEND MONEY* করুন\n"
-                "❌ *Cash Out করবেন না* — Cash Out করলে টাকা যাবে কিন্তু ব্যালেন্স যুক্ত হবে না\n\n"
-                "✨━━━━━━━━━━━━━━━━━━✨\n"
-                "📩 Send Money সম্পন্ন হলে Transaction ID (TrxID) পাঠান:"
-            ), parse_mode="Markdown")
+            bot.send_message(message.chat.id,
+                S.get("dep_min_bdt", "❌ *Minimum deposit is {min_bdt} BDT.*").format(min_bdt=min_bdt),
+                parse_mode="Markdown"); return
+        instructions = S.get(
+            "dep_bdt_instructions",
+            "🏦 *{method} Deposit*\n📲 Send to: `{num}`\n💰 Amount: *{amount} BDT*\n"
+            "📩 Reply with your Transaction ID (TrxID) now:"
+        ).format(method=method, num=num, amount=amount_input)
+        mk = types.InlineKeyboardMarkup()
+        mk.add(types.InlineKeyboardButton(
+            S.get("dep_sent_btn", "✅ I've Sent the Money"), callback_data="depsent"))
+        msg = bot.send_message(message.chat.id, instructions, reply_markup=mk, parse_mode="Markdown")
         bot.register_next_step_handler(msg, alert_admin, amount_input, method)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "dep_start")
+def dep_start_retry(call):
+    """'Try Again' button after an invalid TrxID — re-show payment methods."""
+    uid     = str(call.message.chat.id)
+    S       = STRINGS.get(get_lang(uid), STRINGS["bn"])
+    methods = list(PAYMENT_METHODS().keys())
+    _method_icon = {"bkash": "📱", "rocket": "🚀", "nagad": "🟠", "binance": "🌐"}
+    mk      = types.InlineKeyboardMarkup(row_width=2)
+    btns    = [types.InlineKeyboardButton(f"{_method_icon.get(m.lower(), '💳')} {m}", callback_data=f"dep|{m}")
+               for m in methods]
+    if btns: mk.add(*btns)
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id,
+        S.get("deposit_select", "💳 *Select a Payment Method*"), reply_markup=mk, parse_mode="Markdown")
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "depsent")
+def dep_sent_ack(call):
+    """Cosmetic 'I've sent the money' suggestion button — reinforces the next step."""
+    uid = str(call.message.chat.id)
+    S   = STRINGS.get(get_lang(uid), STRINGS["bn"])
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id,
+        S.get("dep_sent_ack", "📝 *Great!* Please type your Transaction ID (TrxID) now."),
+        parse_mode="Markdown")
 
 
 def _validate_trxid(trx: str, method: str):
@@ -2933,26 +2970,35 @@ def _validate_trxid(trx: str, method: str):
 def alert_admin(message, bdt_amount, method, usd_amount=None):
     global used_trxids
     uid  = str(message.chat.id)
+    S    = STRINGS.get(get_lang(uid), STRINGS["bn"])
     trx  = message.text.strip() if message.text else ""
 
     # ── Format Validation ───────────────────────
     valid, err_msg = _validate_trxid(trx, method)
     if not valid:
         mk_retry = types.InlineKeyboardMarkup()
-        mk_retry.add(types.InlineKeyboardButton("🔄 আবার চেষ্টা করুন", callback_data="dep_start"))
+        mk_retry.add(types.InlineKeyboardButton(
+            "🔄 Try Again" if get_lang(uid) == "en" else "🔄 আবার চেষ্টা করুন", callback_data="dep_start"))
         bot.send_message(message.chat.id, err_msg, parse_mode="Markdown", reply_markup=mk_retry)
         return
 
     # ── Duplicate TrxID check ────────────────────
     trx_key = trx.lower().strip()
     if trx_key in used_trxids:
-        bot.send_message(message.chat.id,
+        dup_msg = (
+            "🚫 *This TrxID has already been used!*\n"
+            "✨━━━━━━━━━━━━━━━━━━✨\n"
+            "❌ Duplicate Transaction IDs are not accepted.\n"
+            "If this is a mistake, please contact Support.\n"
+            "✨━━━━━━━━━━━━━━━━━━✨"
+        ) if get_lang(uid) == "en" else (
             "🚫 *এই TrxID আগে ব্যবহার করা হয়েছে!*\n"
             "✨━━━━━━━━━━━━━━━━━━✨\n"
             "❌ Duplicate Transaction ID গ্রহণযোগ্য নয়।\n"
             "সঠিক TrxID না থাকলে Support-এ যোগাযোগ করুন।\n"
-            "✨━━━━━━━━━━━━━━━━━━✨",
-            parse_mode="Markdown"); return
+            "✨━━━━━━━━━━━━━━━━━━✨"
+        )
+        bot.send_message(message.chat.id, dup_msg, parse_mode="Markdown"); return
 
     mk = types.InlineKeyboardMarkup(row_width=2)
     mk.add(
@@ -2979,16 +3025,17 @@ def alert_admin(message, bdt_amount, method, usd_amount=None):
         "trx_key": trx_key,
     }
     _save_pending_deps(pending_deposits)
-    support_url = "https://t.me/owner_of_pam"
+    support_url = f"https://t.me/{SUPPORT_USERNAME().lstrip('@')}" if SUPPORT_USERNAME() else "https://t.me/owner_of_pam"
     mk_sup = types.InlineKeyboardMarkup()
     mk_sup.add(types.InlineKeyboardButton("🆘 Support", url=support_url))
     bot.send_message(message.chat.id,
-        "✅ *আপনার ডিপোজিট রিকোয়েস্ট এডমিনের কাছে পাঠানো হয়েছে।*\n"
-        "✨━━━━━━━━━━━━━━━━━━✨\n"
-        "⏳ অনুগ্রহ করে কিছুক্ষণ অপেক্ষা করুন।\n\n"
-        "🕐 *১–১০ মিনিটের মধ্যে আপনার একাউন্টে ব্যালেন্স যুক্ত না হলে*\n"
-        "সাপোর্টে যোগাযোগ করুন।\n"
-        "✨━━━━━━━━━━━━━━━━━━✨",
+        S.get("dep_sent",
+            "✅ *Your deposit request has been submitted!*\n"
+            "✨━━━━━━━━━━━━━━━━━━✨\n"
+            "⏳ Please wait a few minutes.\n\n"
+            "🕐 *If your balance isn't credited within 1–10 minutes*\n"
+            "please contact Support.\n"
+            "✨━━━━━━━━━━━━━━━━━━✨"),
         reply_markup=mk_sup,
         parse_mode="Markdown")
 
