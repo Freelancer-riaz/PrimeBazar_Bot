@@ -2601,6 +2601,17 @@ def _adm_send_vpn_deliver(message, target_uid):
         now      = bst_now()
         u_bal    = f"{round(get_user(target_uid).get('balance', 0), 2):.2f}"
 
+        # Split "email|password" so each value is wrapped in its own `code`
+        # block — tapping a `code` value in Telegram copies just that value.
+        if "|" in cred_block:
+            email_part, pass_part = cred_block.split("|", 1)
+            cred_lines = (
+                f"📧 *Email:*\n`{email_part.strip()}`\n\n"
+                f"🔑 *Password:*\n`{pass_part.strip()}`"
+            )
+        else:
+            cred_lines = f"`{cred_block}`"
+
         # Send the formatted VPN access to the user
         bot.send_message(
             target_uid,
@@ -2612,8 +2623,9 @@ def _adm_send_vpn_deliver(message, target_uid):
             f"💰 *Balance:* {u_bal} BDT\n"
             f"🕐 *Time:* {now}\n"
             f"✨━━━━━━━━━━━━━━━━━━✨\n"
-            f"{cred_block}\n"
+            f"{cred_lines}\n"
             f"✨━━━━━━━━━━━━━━━━━━✨\n"
+            f"👆 _উপরের Email/Password-এ ট্যাপ করলে কপি হয়ে যাবে_\n"
             f"🎉 *ধন্যবাদ! Prime Bazar ব্যবহার করার জন্য।*",
             parse_mode="Markdown"
         )
