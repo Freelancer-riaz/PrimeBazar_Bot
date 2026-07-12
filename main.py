@@ -32,7 +32,9 @@ from mongo_db import (
     db_load_all_users, db_save_one_user, db_save_all_users,
     db_load_stock, db_save_stock, db_append_stock, db_stock_count, db_delete_stock,
     db_append_sold, db_load_sold,
+    db_load_reviews, db_append_review,
 )
+import uuid
 
 try:
     from pyrogram import Client, filters as pf
@@ -558,6 +560,7 @@ _SETTINGS_DEFAULTS = {
     "language_selection_enabled": True,
     "daily_bonus_enabled":        True,
     "daily_bonus_amount":         5,
+    "staff_ids":                  [],
     "force_join_channels": [
         {"username": "@prime_bazar_update", "url": "https://t.me/prime_bazar_update", "name": "Prime Bazar Update"},
         {"username": "@primeaccmarket",     "url": "https://t.me/primeaccmarket",     "name": "Prime Acc Market"},
@@ -2162,9 +2165,11 @@ def _mail_execute(call, uid, p_name, qty, total, mode, S):
         update_user(uid, "balance", -total)
         update_user(uid, "total_orders", 1)
         now = bst_now()
-        user_data[uid]["orders"].append({"product": p_name, "qty": qty, "total": total, "date": now})
+        order_id = uuid.uuid4().hex[:8]
+        user_data[uid]["orders"].append({"order_id": order_id, "product": p_name, "qty": qty, "total": total, "date": now})
         user_data[uid]["last_purchase_time"] = now
         save_data(user_data)
+        _prompt_review(uid, order_id, p_name, S)
         u       = get_user(uid)
         new_bal = round(u["balance"], 2)
         try:
@@ -2370,10 +2375,11 @@ def finalize_order(call):
             show_alert=True); return
     is_vpn = prods[p_name].get("cat") == "vpn"
     bot.answer_callback_query(call.id, "⏳ Processing...")
+    order_id = uuid.uuid4().hex[:8]
     try:
         p_info = prods[p_name]
         if is_vpn and _is_manual_delivery_vpn(p_info, p_name):
-            _deliver_vpn_manual(uid, p_name, p_info, qty, total, S)
+            _deliver_vpn_manual(uid, p_name, p_info, qty, total, S, order_id)
         elif is_vpn:
             d_name   = disp_name(p_info, p_name)
             duration = p_info.get("duration", "N/A")
@@ -2393,9 +2399,14 @@ def finalize_order(call):
         update_user(uid, "balance", -total)
         update_user(uid, "total_orders", 1)
         now = bst_now()
-        user_data[uid]["orders"].append({"product": p_name, "qty": qty, "total": total, "date": now})
+        is_manual_vpn = is_vpn and _is_manual_delivery_vpn(p_info, p_name)
+        user_data[uid]["orders"].append({"order_id": order_id, "product": p_name, "qty": qty, "total": total, "date": now})
         user_data[uid]["last_purchase_time"] = now
         save_data(user_data)
+        if not is_manual_vpn:
+            # Manual VPN orders get their review prompt only after the admin
+            # actually delivers credentials (see _adm_send_vpn_deliver).
+            _prompt_review(uid, order_id, p_name, S)
         # Admin success notification
         u = get_user(uid)
         new_bal = round(u["balance"], 2)
@@ -2496,7 +2507,7 @@ def _deliver_mail(uid, call, p_name, qty, total, success_msg, S):
                       parse_mode="Markdown")
 
 
-def _deliver_vpn_manual(uid, p_name, p_info, qty, total, S):
+def _deliver_vpn_manual(uid, p_name, p_info, qty, total, S, order_id=None):
     """Manual delivery — notify user to wait, alert admin to send VPN access."""
     d_name   = disp_name(p_info, p_name)
     duration = p_info.get("duration", "N/A")
@@ -2513,6 +2524,7 @@ def _deliver_vpn_manual(uid, p_name, p_info, qty, total, S):
         "time":      now,
         "user_name": user_name,
         "username":  username,
+        "order_id":  order_id,
     }
     _save_manual_orders(_pending_manual_orders)
     # Notify user
@@ -3118,6 +3130,67 @@ def daily_bonus(message):
 # ═══════════════════════════════════════════════
 #  ORDERS / COUPON
 # ═══════════════════════════════════════════════
+def _prompt_review(uid, order_id, p_name, S):
+    """Ask the buyer to rate their just-completed order with a 1–5 star tap."""
+    try:
+        mk = types.InlineKeyboardMarkup(row_width=5)
+        mk.add(*[
+            types.InlineKeyboardButton(f"{'⭐' * n}", callback_data=f"rate|{order_id}|{n}")
+            for n in range(1, 6)
+        ])
+        bot.send_message(
+            uid,
+            S.get("review_prompt", "🌟 *How was your experience with {product}?*\nTap to rate:").format(product=p_name),
+            reply_markup=mk, parse_mode="Markdown")
+    except Exception:
+        pass
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("rate|"))
+def cb_submit_review(call):
+    """User tapped a star rating — store it and optionally ask for a comment."""
+    uid  = str(call.message.chat.id)
+    S    = STRINGS.get(get_lang(uid), STRINGS["bn"])
+    _, order_id, stars = call.data.split("|")
+    stars = int(stars)
+    bot.answer_callback_query(call.id, "✅ Thanks for your feedback!")
+    # Find product name from the user's own order history for context
+    order = next((o for o in get_user(uid).get("orders", []) if o.get("order_id") == order_id), {})
+    product = order.get("product", "—")
+    db_append_review({
+        "order_id": order_id, "uid": uid, "product": product,
+        "rating": stars, "date": bst_now(),
+    })
+    try:
+        bot.edit_message_text(
+            f"{'⭐' * stars}\n" + S.get("review_thanks", "✅ *Thank you for rating this order!*"),
+            call.message.chat.id, call.message.message_id, parse_mode="Markdown")
+    except Exception: pass
+
+
+@bot.message_handler(commands=["reviews"])
+def admin_reviews(message):
+    """Quick command: shows average rating and the most recent reviews."""
+    if not staff_only(message): return
+    reviews = db_load_reviews()
+    if not reviews:
+        bot.send_message(message.chat.id, "📭 এখনো কোনো রিভিউ আসেনি।"); return
+    avg = round(sum(r.get("rating", 0) for r in reviews) / len(reviews), 2)
+    stars_summary = {n: sum(1 for r in reviews if r.get("rating") == n) for n in range(1, 6)}
+    lines = [
+        "⭐ *Customer Reviews*",
+        "✨━━━━━━━━━━━━━━━━━━✨",
+        f"📊 Average Rating: *{avg} / 5*  ({len(reviews)} reviews)",
+    ]
+    for n in range(5, 0, -1):
+        lines.append(f"{'⭐' * n}: {stars_summary[n]}")
+    lines.append("✨━━━━━━━━━━━━━━━━━━✨")
+    lines.append("*Recent reviews:*")
+    for r in reversed(reviews[-8:]):
+        lines.append(f"{'⭐' * r.get('rating', 0)} · {r.get('product','—')} · {r.get('date','—')}")
+    bot.send_message(message.chat.id, "\n".join(lines), parse_mode="Markdown")
+
+
 @bot.callback_query_handler(func=lambda c: c.data == "order_history")
 def cb_order_history(call):
     uid  = str(call.message.chat.id)
@@ -3215,6 +3288,23 @@ def coupon_apply(message):
 def admin_only(obj):
     uid = obj.from_user.id if hasattr(obj, "from_user") else obj.chat.id
     return uid == ADMIN_ID
+
+
+def is_staff(chat_id) -> bool:
+    """Owner (ADMIN_ID) is always staff. Staff members are extra Telegram IDs
+    the owner has granted limited access to (order fulfillment + stock only)."""
+    try:
+        cid = int(chat_id)
+    except (TypeError, ValueError):
+        return False
+    if cid == ADMIN_ID:
+        return True
+    return str(cid) in {str(s) for s in (cfg("staff_ids") or [])}
+
+
+def staff_only(obj) -> bool:
+    uid = obj.from_user.id if hasattr(obj, "from_user") else obj.chat.id
+    return is_staff(uid)
 
 _ADMIN_PANEL_TXT = (
     "🔑 *MASTER ADMIN PANEL*\n"

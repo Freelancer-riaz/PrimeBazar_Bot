@@ -299,3 +299,23 @@ def db_load_sold(p_name: str) -> list:
         return doc.get("rows", []) if doc else []
     except PyMongoError:
         return []
+
+
+# ─── Reviews / Ratings ─────────────────────────────────────────────────────────
+
+def db_load_reviews() -> list:
+    """Load all reviews (each: order_id, uid, product, rating, comment, date)."""
+    try:
+        doc = _db()["reviews"].find_one({"_id": "main"})
+        return doc.get("data", []) if doc else []
+    except PyMongoError:
+        return []
+
+
+def db_append_review(review: dict):
+    try:
+        _db()["reviews"].update_one(
+            {"_id": "main"}, {"$push": {"data": review}}, upsert=True
+        )
+    except PyMongoError:
+        pass
