@@ -3454,6 +3454,29 @@ def _adm_syncstock(call):
 # ─────────────────────────────────────────────────────────────────────
 #  📊 Mail Report — Used (sold) vs Fresh (remaining) accounts as .xlsx
 # ─────────────────────────────────────────────────────────────────────
+@bot.message_handler(commands=["mailstock", "stocklist"])
+def admin_mail_stock(message):
+    """Quick command: instantly shows Fresh vs Used mail stock for every product."""
+    if message.chat.id != ADMIN_ID: return
+    prods = {p: info for p, info in get_products().items() if info.get("cat") != "vpn"}
+    if not prods:
+        bot.send_message(ADMIN_ID, "❌ কোনো মেইল প্রোডাক্ট পাওয়া যায়নি।"); return
+    lines = ["📊 *Mail Stock Overview*", "✨━━━━━━━━━━━━━━━━━━✨"]
+    total_fresh = total_used = 0
+    for p in prods:
+        fresh = get_stock_count(p)
+        used  = len(db_load_sold(p))
+        total_fresh += fresh
+        total_used  += used
+        warn = " ⚠️" if fresh <= 5 else ""
+        lines.append(f"📧 *{p}*\n   🟢 Fresh: *{fresh}*  |  ✅ Used: *{used}*{warn}")
+    lines.append("✨━━━━━━━━━━━━━━━━━━✨")
+    lines.append(f"📦 *Total Fresh:* {total_fresh}  |  *Total Used:* {total_used}")
+    mk = types.InlineKeyboardMarkup(row_width=1)
+    mk.add(types.InlineKeyboardButton("📥 Download Detailed Report", callback_data="adm|mailreport"))
+    bot.send_message(ADMIN_ID, "\n".join(lines), reply_markup=mk, parse_mode="Markdown")
+
+
 def _adm_mailreport_select(call):
     """List mail products (non-VPN) so admin can pick which one to report on."""
     prods = {p: info for p, info in get_products().items() if info.get("cat") != "vpn"}
@@ -5126,6 +5149,7 @@ if __name__ == "__main__":
         types.BotCommand("mybalance",   "💰 Supplier bot live balance"),
         types.BotCommand("broadcast",   "📢 Broadcast to all users"),
         types.BotCommand("addstock",    "📦 Upload stock file"),
+        types.BotCommand("mailstock",   "📧 View mail stock (Fresh/Used)"),
         types.BotCommand("backup",      "💾 Backup database"),
         types.BotCommand("restore",     "📥 Restore database"),
     ]
