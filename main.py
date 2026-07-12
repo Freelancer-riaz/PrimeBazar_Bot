@@ -3468,7 +3468,7 @@ def admin_mail_stock(message):
         used  = len(db_load_sold(p))
         total_fresh += fresh
         total_used  += used
-        warn = " ⚠️" if fresh <= 5 else ""
+        warn = " ⚠️" if fresh <= 20 else ""
         lines.append(f"📧 *{p}*\n   🟢 Fresh: *{fresh}*  |  ✅ Used: *{used}*{warn}")
     lines.append("✨━━━━━━━━━━━━━━━━━━✨")
     lines.append(f"📦 *Total Fresh:* {total_fresh}  |  *Total Used:* {total_used}")
