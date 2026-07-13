@@ -901,6 +901,9 @@ _userbot_ready   = threading.Event()
 # Persisted to disk so orders survive bot restarts
 _pending_manual_orders: dict = _load_manual_orders()
 
+# UIDs currently being processed — prevents double-click duplicate orders
+_processing_uids: set = set()
+
 # Queue receives (kind, message) from the supplier bot for navigation
 _supplier_queue: "asyncio.Queue | None"              = None
 _supplier_nav_lock: "asyncio.Lock | None"            = None
@@ -2130,8 +2133,14 @@ def mail_order_confirm(call):
         bot.answer_callback_query(call.id)
     else:
         # Bulk: the qty-input message cannot be edited (it's a send_message), go to mailpay directly
+        if uid in _processing_uids:
+            bot.answer_callback_query(call.id, "⏳ আপনার অর্ডারটি ইতিমধ্যে প্রক্রিয়া হচ্ছে, অনুগ্রহ করে অপেক্ষা করুন।", show_alert=True); return
+        _processing_uids.add(uid)
         bot.answer_callback_query(call.id, "⏳ Processing...")
-        _mail_execute(call, uid, p_name, qty, total, mode, S)
+        try:
+            _mail_execute(call, uid, p_name, qty, total, mode, S)
+        finally:
+            _processing_uids.discard(uid)
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("mailpay|"))
@@ -2141,6 +2150,8 @@ def mail_pay(call):
     uid    = str(call.message.chat.id)
     lang   = get_lang(uid)
     S      = STRINGS.get(lang, STRINGS["bn"])
+    if uid in _processing_uids:
+        bot.answer_callback_query(call.id, "⏳ আপনার অর্ডারটি ইতিমধ্যে প্রক্রিয়া হচ্ছে, অনুগ্রহ করে অপেক্ষা করুন।", show_alert=True); return
     prods  = get_products()
     if p_name not in prods:
         bot.answer_callback_query(call.id, S.get("shop_file_err","❌ File Error!"), show_alert=True); return
@@ -2150,8 +2161,12 @@ def mail_pay(call):
         bot.answer_callback_query(call.id,
             S.get("shop_low_bal","❌ Insufficient balance!").format(bal=u["balance"], total=total),
             show_alert=True); return
+    _processing_uids.add(uid)
     bot.answer_callback_query(call.id, "⏳ Processing...")
-    _mail_execute(call, uid, p_name, qty, total, mode, S)
+    try:
+        _mail_execute(call, uid, p_name, qty, total, mode, S)
+    finally:
+        _processing_uids.discard(uid)
 
 
 def _mail_execute(call, uid, p_name, qty, total, mode, S):
@@ -2364,6 +2379,8 @@ def finalize_order(call):
     p_name = parts[1]; qty = int(parts[2])
     uid    = str(call.message.chat.id)
     S      = STRINGS.get(get_lang(uid), STRINGS["bn"])
+    if uid in _processing_uids:
+        bot.answer_callback_query(call.id, "⏳ আপনার অর্ডারটি ইতিমধ্যে প্রক্রিয়া হচ্ছে, অনুগ্রহ করে অপেক্ষা করুন।", show_alert=True); return
     prods  = get_products()
     if p_name not in prods:
         bot.answer_callback_query(call.id, S.get("shop_file_err","❌ File Error!"), show_alert=True); return
@@ -2374,6 +2391,7 @@ def finalize_order(call):
             S.get("shop_low_bal","❌ Insufficient balance! {bal} < {total}").format(bal=bal, total=total),
             show_alert=True); return
     is_vpn = prods[p_name].get("cat") == "vpn"
+    _processing_uids.add(uid)
     bot.answer_callback_query(call.id, "⏳ Processing...")
     order_id = uuid.uuid4().hex[:8]
     try:
@@ -2489,6 +2507,8 @@ def finalize_order(call):
                 parse_mode="Markdown")
         except Exception: pass
         bot.send_message(uid, S.get("shop_file_err","❌ *File Error!* Contact support."), parse_mode="Markdown")
+    finally:
+        _processing_uids.discard(uid)
 
 
 def _deliver_mail(uid, call, p_name, qty, total, success_msg, S):
