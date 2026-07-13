@@ -3151,8 +3151,11 @@ def daily_bonus(message):
 #  ORDERS / COUPON
 # ═══════════════════════════════════════════════
 def _prompt_review(uid, order_id, p_name, S):
-    """Ask the buyer to rate their just-completed order with a 1–5 star tap."""
+    """Ask the buyer to rate their just-completed order with a 1–5 star tap.
+    Only shown on the very first purchase — avoids annoying repeat buyers."""
     try:
+        if get_user(uid).get("total_orders", 0) != 1:
+            return
         mk = types.InlineKeyboardMarkup(row_width=5)
         mk.add(*[
             types.InlineKeyboardButton(f"{'⭐' * n}", callback_data=f"rate|{order_id}|{n}")
@@ -3384,6 +3387,11 @@ def admin_panel_markup():
         types.InlineKeyboardButton("🤖 Userbot Config",  callback_data="adm|userbot"),
     )
 
+    _adm_section(mk, "👮 SUB ADMIN")
+    mk.add(
+        types.InlineKeyboardButton("👤 Sub Admins",      callback_data="adm|subadmins"),
+    )
+
     _adm_section(mk, "⚙️ SYSTEM")
     dep_on = cfg("deposit_enabled") is not False
     mk.add(
@@ -3436,6 +3444,7 @@ def admin_router(call):
         "btnlabels":     _adm_btnlabels,
         "manual_orders": _adm_manual_orders,
         "mailreport":    _adm_mailreport_select,
+        "subadmins":     _adm_subadmins,
     }.get(action, lambda _: None)(call)
 
     if action == "addstock":
@@ -3452,6 +3461,80 @@ def admin_router(call):
     elif action == "restore":
         msg = bot.send_message(ADMIN_ID, "📥 ইউজার ডাটা (.json) ফাইলটি পাঠান।")
         bot.register_next_step_handler(msg, do_restore)
+
+
+# ─────────────────────────────────────────────
+#  Sub Admin Management
+# ─────────────────────────────────────────────
+def _adm_subadmins(call):
+    """Show current sub-admins with add/remove buttons."""
+    staff = list(cfg("staff_ids") or [])
+    mk = types.InlineKeyboardMarkup(row_width=1)
+    if staff:
+        for sid in staff:
+            mk.add(types.InlineKeyboardButton(
+                f"❌ Remove: {sid}", callback_data=f"subadm|remove|{sid}"))
+    mk.add(types.InlineKeyboardButton("➕ নতুন Sub Admin যোগ করুন", callback_data="subadm|add"))
+    mk.add(types.InlineKeyboardButton("🔙 Back", callback_data="adm|back"))
+    txt = (
+        "👮 *Sub Admin Management*\n"
+        "✨━━━━━━━━━━━━━━━━━━✨\n"
+        + (("\n".join(f"• `{sid}`" for sid in staff)) if staff else "⚠️ কোনো Sub Admin নেই।")
+        + "\n✨━━━━━━━━━━━━━━━━━━✨\n"
+        "➕ যোগ করতে নিচের বাটন চাপুন।\n"
+        "❌ Remove করতে ID-র পাশের বাটন চাপুন।"
+    )
+    try:
+        bot.edit_message_text(txt, ADMIN_ID, call.message.message_id,
+                              reply_markup=mk, parse_mode="Markdown")
+    except Exception:
+        bot.send_message(ADMIN_ID, txt, reply_markup=mk, parse_mode="Markdown")
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("subadm|"))
+def subadmin_router(call):
+    if call.message.chat.id != ADMIN_ID: return
+    parts  = call.data.split("|")
+    action = parts[1]
+    bot.answer_callback_query(call.id)
+
+    if action == "add":
+        msg = bot.send_message(
+            ADMIN_ID,
+            "👤 নতুন Sub Admin-এর *Telegram ID* দিন (সংখ্যা, যেমন: `123456789`):",
+            parse_mode="Markdown")
+        bot.register_next_step_handler(msg, _subadm_save_new)
+
+    elif action == "remove" and len(parts) > 2:
+        remove_id = parts[2]
+        staff = list(cfg("staff_ids") or [])
+        staff = [s for s in staff if str(s) != str(remove_id)]
+        settings["staff_ids"] = staff
+        save_settings(settings)
+        bot.send_message(ADMIN_ID,
+            f"✅ Sub Admin `{remove_id}` সরিয়ে দেওয়া হয়েছে।", parse_mode="Markdown")
+        _adm_subadmins(call)
+
+
+def _subadm_save_new(message):
+    if message.chat.id != ADMIN_ID: return
+    new_id = message.text.strip()
+    if not new_id.lstrip("-").isdigit():
+        bot.send_message(ADMIN_ID, "❌ Valid Telegram ID দিন (শুধু সংখ্যা)।"); return
+    new_id = int(new_id)
+    if new_id == ADMIN_ID:
+        bot.send_message(ADMIN_ID, "❌ আপনি নিজেই Master Admin — এটা add করার দরকার নেই।"); return
+    staff = list(cfg("staff_ids") or [])
+    if str(new_id) in {str(s) for s in staff}:
+        bot.send_message(ADMIN_ID, f"⚠️ `{new_id}` ইতিমধ্যে Sub Admin হিসেবে আছে।",
+                         parse_mode="Markdown"); return
+    staff.append(new_id)
+    settings["staff_ids"] = staff
+    save_settings(settings)
+    bot.send_message(ADMIN_ID,
+        f"✅ `{new_id}` কে Sub Admin হিসেবে যোগ করা হয়েছে!\n"
+        f"এখন তিনি স্টাফ-অ্যাক্সেস পাবেন।",
+        parse_mode="Markdown")
 
 
 # ─────────────────────────────────────────────
