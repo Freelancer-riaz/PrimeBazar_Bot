@@ -561,6 +561,10 @@ _SETTINGS_DEFAULTS = {
     "daily_bonus_enabled":        True,
     "daily_bonus_amount":         5,
     "staff_ids":                  [],
+    "new_user_alert":             True,
+    "faq_enabled":                False,
+    "faq_items":                  [],
+    "last_weekly_report":         None,
     "force_join_channels": [
         {"username": "@prime_bazar_update", "url": "https://t.me/prime_bazar_update", "name": "Prime Bazar Update"},
         {"username": "@primeaccmarket",     "url": "https://t.me/primeaccmarket",     "name": "Prime Acc Market"},
@@ -840,6 +844,7 @@ _USER_DEFAULTS = {
     "total_deposit":      0,
     "total_orders":       0,
     "orders":             [],
+    "deposit_history":    [],
     "last_deposit_time":  None,
     "last_purchase_time": None,
     "last_daily_bonus":   None,
@@ -1654,7 +1659,22 @@ def welcome(message):
         bot.send_message(message.chat.id, cfg("maintenance_message")); return
     if not check_membership(message.chat.id):
         send_join_prompt(message.chat.id, get_lang(uid)); return
+    _is_new = not user_data.get(uid, {}).get("joined", False)
     user_data[uid]["joined"] = True; save_data(user_data)
+    if _is_new and cfg("new_user_alert") is not False:
+        try:
+            fn = message.from_user.first_name or ""
+            un = f"@{message.from_user.username}" if message.from_user.username else "—"
+            bot.send_message(ADMIN_ID,
+                f"👋 *নতুন ইউজার যোগ দিয়েছে!*\n"
+                f"✨━━━━━━━━━━━━━━━━━━✨\n"
+                f"👤 নাম: *{fn}*\n"
+                f"🔖 Username: {un}\n"
+                f"🆔 ID: `{uid}`\n"
+                f"✨━━━━━━━━━━━━━━━━━━✨",
+                parse_mode="Markdown")
+        except Exception:
+            pass
     lang = user.get("language")
     if not lang: _send_lang_selection(message.chat.id); return
     _send_welcome(message.chat.id, uid, lang)
@@ -1759,6 +1779,8 @@ def profile(message):
            types.InlineKeyboardButton(photo_lbl,   callback_data="toggle_photo"))
     mk.add(types.InlineKeyboardButton(hist_lbl,    callback_data="order_history"),
            types.InlineKeyboardButton(resend_lbl,  callback_data="resend_last_order"))
+    dep_hist_lbl = "💳 Deposit History" if lang == "en" else "💳 ডিপোজিট হিস্টোরি"
+    mk.add(types.InlineKeyboardButton(dep_hist_lbl, callback_data="deposit_history"))
 
     if not u.get("show_photo", True):
         bot.send_message(message.chat.id, caption, parse_mode="Markdown", reply_markup=mk); return
@@ -3094,7 +3116,12 @@ def admin_deposit_decision(call):
         tid = parts[2]; amt = int(parts[3])
         trx_key = parts[4] if len(parts) > 4 else None
         update_user(tid, "balance", amt); update_user(tid, "total_deposit", amt)
-        user_data[tid]["last_deposit_time"] = bst_now(); save_data(user_data)
+        user_data[tid]["last_deposit_time"] = bst_now()
+        dep_rec = {"amount": amt, "date": str(bst_now())}
+        if "deposit_history" not in user_data[tid]:
+            user_data[tid]["deposit_history"] = []
+        user_data[tid]["deposit_history"].append(dep_rec)
+        save_data(user_data)
         # Save TrxID so it can't be reused
         if trx_key:
             used_trxids.add(trx_key)
@@ -3227,6 +3254,26 @@ def cb_order_history(call):
     for i, o in enumerate(reversed(orders[-10:]), 1):
         txt += f"*{i}.* {o['product']} × {o['qty']} — *{o['total']} BDT*\n    📅 {o['date']}\n\n"
     txt += S.get("orders_footer","✨━━━━━━━━━━━━✨\n📊 Total: *{count}*").format(count=len(orders))
+    bot.send_message(uid, txt, parse_mode="Markdown")
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "deposit_history")
+def cb_deposit_history(call):
+    uid  = str(call.message.chat.id)
+    lang = get_lang(uid)
+    u    = get_user(uid)
+    hist = u.get("deposit_history", [])
+    bot.answer_callback_query(call.id)
+    if not hist:
+        msg = "💳 *Deposit History*\n✨━━━━━━━━━━━━━━━━━━✨\n📭 কোনো ডিপোজিট রেকর্ড নেই।" \
+              if lang == "bn" else "💳 *Deposit History*\n✨━━━━━━━━━━━━━━━━━━✨\n📭 No deposit records yet."
+        bot.send_message(uid, msg, parse_mode="Markdown"); return
+    txt = "💳 *ডিপোজিট হিস্টোরি*\n✨━━━━━━━━━━━━━━━━━━✨\n" \
+          if lang == "bn" else "💳 *Deposit History*\n✨━━━━━━━━━━━━━━━━━━✨\n"
+    for i, d in enumerate(reversed(hist[-15:]), 1):
+        txt += f"*{i}.* 💰 *{d['amount']} BDT*\n    📅 {d['date']}\n\n"
+    total = sum(d["amount"] for d in hist)
+    txt += f"✨━━━━━━━━━━━━━━━━━━✨\n📊 মোট ডিপোজিট: *{total} BDT*"
     bot.send_message(uid, txt, parse_mode="Markdown")
 
 
@@ -3377,7 +3424,11 @@ def admin_panel_markup():
     _adm_section(mk, "📊 ANALYTICS & SETTINGS")
     mk.add(
         types.InlineKeyboardButton("📊 Stats",           callback_data="adm|stats"),
+        types.InlineKeyboardButton("📈 Top Buyers",      callback_data="adm|topbuyers"),
+    )
+    mk.add(
         types.InlineKeyboardButton("🎨 Branding",        callback_data="adm|branding"),
+        types.InlineKeyboardButton("❓ FAQ Manager",     callback_data="adm|faqmgr"),
     )
     mk.add(
         types.InlineKeyboardButton("🔘 Button Labels",   callback_data="adm|btnlabels"),
@@ -3447,6 +3498,8 @@ def admin_router(call):
         "mailreport":    _adm_mailreport_select,
         "subadmins":     _adm_subadmins,
         "stockmgr":      _adm_stockmgr,
+        "topbuyers":     _adm_top_buyers,
+        "faqmgr":        _adm_faqmgr,
     }.get(action, lambda _: None)(call)
 
     if action == "addstock":
@@ -3537,6 +3590,185 @@ def _subadm_save_new(message):
         f"✅ `{new_id}` কে Sub Admin হিসেবে যোগ করা হয়েছে!\n"
         f"এখন তিনি স্টাফ-অ্যাক্সেস পাবেন।",
         parse_mode="Markdown")
+
+
+# ─────────────────────────────────────────────
+#  Top Buyers
+# ─────────────────────────────────────────────
+def _adm_top_buyers(call):
+    top = sorted(
+        [(uid, u) for uid, u in user_data.items() if u.get("total_orders", 0) > 0],
+        key=lambda x: x[1].get("total_orders", 0), reverse=True
+    )[:10]
+    mk = types.InlineKeyboardMarkup()
+    mk.add(types.InlineKeyboardButton("🔙 Back", callback_data="adm|back"))
+    if not top:
+        txt = "📈 *Top Buyers*\n✨━━━━━━━━━━━━━━━━━━✨\n⚠️ এখনো কোনো অর্ডার নেই।"
+    else:
+        txt = "📈 *Top Buyers — সেরা ১০ কাস্টমার*\n✨━━━━━━━━━━━━━━━━━━✨\n"
+        medals = ["🥇", "🥈", "🥉"] + ["🏅"] * 7
+        for i, (uid, u) in enumerate(top):
+            fn   = u.get("first_name", "") or u.get("username", "") or uid
+            ords = u.get("total_orders", 0)
+            dep  = u.get("total_deposit", 0)
+            txt += f"{medals[i]} *{fn}* (`{uid}`)\n   🛒 {ords} অর্ডার  💰 {dep} BDT\n\n"
+        txt += "✨━━━━━━━━━━━━━━━━━━✨"
+    try:
+        bot.edit_message_text(txt, ADMIN_ID, call.message.message_id,
+                              reply_markup=mk, parse_mode="Markdown")
+    except Exception:
+        bot.send_message(ADMIN_ID, txt, reply_markup=mk, parse_mode="Markdown")
+
+
+# ─────────────────────────────────────────────
+#  FAQ Manager (Admin)
+# ─────────────────────────────────────────────
+def _adm_faqmgr(call):
+    items  = cfg("faq_items") or []
+    enabled = cfg("faq_enabled") is True
+    mk = types.InlineKeyboardMarkup(row_width=1)
+    mk.add(types.InlineKeyboardButton(
+        f"{'✅ FAQ চালু আছে' if enabled else '❌ FAQ বন্ধ আছে'} — টগল করুন",
+        callback_data="faqadm|toggle"))
+    for i, item in enumerate(items):
+        mk.add(types.InlineKeyboardButton(
+            f"❌ [{i+1}] {item['keyword'][:30]}",
+            callback_data=f"faqadm|del|{i}"))
+    mk.add(types.InlineKeyboardButton("➕ নতুন FAQ যোগ করুন", callback_data="faqadm|add"))
+    mk.add(types.InlineKeyboardButton("🔙 Back", callback_data="adm|back"))
+    txt = (
+        "❓ *FAQ Manager*\n"
+        "✨━━━━━━━━━━━━━━━━━━✨\n"
+        f"📋 মোট FAQ: *{len(items)}*\n"
+        f"স্ট্যাটাস: {'✅ চালু' if enabled else '❌ বন্ধ'}\n"
+        "✨━━━━━━━━━━━━━━━━━━✨\n"
+        "কেউ keyword লিখলে অটো উত্তর যাবে।\n"
+        "❌ বাটন চাপলে সেই FAQ মুছে যাবে।"
+    )
+    try:
+        bot.edit_message_text(txt, ADMIN_ID, call.message.message_id,
+                              reply_markup=mk, parse_mode="Markdown")
+    except Exception:
+        bot.send_message(ADMIN_ID, txt, reply_markup=mk, parse_mode="Markdown")
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("faqadm|"))
+def faqadm_router(call):
+    if call.message.chat.id != ADMIN_ID: return
+    parts  = call.data.split("|", 2)
+    action = parts[1]
+    bot.answer_callback_query(call.id)
+
+    if action == "toggle":
+        new_val = not (cfg("faq_enabled") is True)
+        settings["faq_enabled"] = new_val
+        save_settings(settings)
+        _adm_faqmgr(call)
+
+    elif action == "add":
+        msg = bot.send_message(
+            ADMIN_ID,
+            "❓ *নতুন FAQ যোগ করুন*\n\n"
+            "এই ফরম্যাটে দুই লাইনে লিখুন:\n"
+            "`keyword`\n`উত্তর টেক্সট`\n\n"
+            "উদাহরণ:\n`দাম\n১ মাস Netflix ২৫০ টাকা`",
+            parse_mode="Markdown")
+        bot.register_next_step_handler(msg, _faqadm_save)
+
+    elif action == "del" and len(parts) > 2:
+        idx = int(parts[2])
+        items = list(cfg("faq_items") or [])
+        if 0 <= idx < len(items):
+            removed = items.pop(idx)
+            settings["faq_items"] = items
+            save_settings(settings)
+            bot.send_message(ADMIN_ID,
+                f"✅ FAQ মুছে দেওয়া হয়েছে: `{removed['keyword']}`",
+                parse_mode="Markdown")
+        _adm_faqmgr(call)
+
+
+def _faqadm_save(message):
+    if message.chat.id != ADMIN_ID: return
+    lines = message.text.strip().split("\n", 1)
+    if len(lines) < 2 or not lines[0].strip() or not lines[1].strip():
+        bot.send_message(ADMIN_ID,
+            "❌ দুই লাইনে লিখুন:\n`keyword`\n`উত্তর`", parse_mode="Markdown"); return
+    keyword = lines[0].strip().lower()
+    answer  = lines[1].strip()
+    items   = list(cfg("faq_items") or [])
+    items.append({"keyword": keyword, "answer": answer})
+    settings["faq_items"] = items
+    save_settings(settings)
+    bot.send_message(ADMIN_ID,
+        f"✅ FAQ যোগ হয়েছে!\n🔑 Keyword: `{keyword}`\n💬 উত্তর: {answer}",
+        parse_mode="Markdown")
+
+
+# ─────────────────────────────────────────────
+#  Auto-FAQ message handler (user-side)
+# ─────────────────────────────────────────────
+@bot.message_handler(func=lambda m: (
+    cfg("faq_enabled") is True
+    and m.text
+    and not m.text.startswith("/")
+    and str(m.chat.id) != str(ADMIN_ID)
+))
+def auto_faq_reply(message):
+    text  = message.text.lower().strip()
+    items = cfg("faq_items") or []
+    for item in items:
+        if item.get("keyword", "").lower() in text:
+            try:
+                bot.send_message(message.chat.id, item["answer"], parse_mode="Markdown")
+            except Exception:
+                pass
+            return
+
+
+# ─────────────────────────────────────────────
+#  Weekly Auto-Report
+# ─────────────────────────────────────────────
+def _send_weekly_report():
+    total_users = len(user_data)
+    total_dep   = sum(u.get("total_deposit", 0) for u in user_data.values())
+    total_ord   = sum(u.get("total_orders", 0)  for u in user_data.values())
+    total_bal   = sum(u.get("balance", 0)        for u in user_data.values())
+    now_str     = str(bst_now())[:16]
+    txt = (
+        f"📊 *সাপ্তাহিক রিপোর্ট*\n"
+        f"✨━━━━━━━━━━━━━━━━━━✨\n"
+        f"📅 তারিখ: *{now_str}*\n\n"
+        f"👥 মোট ইউজার: *{total_users}*\n"
+        f"💰 মোট ডিপোজিট: *{total_dep} BDT*\n"
+        f"🛒 মোট অর্ডার: *{total_ord}*\n"
+        f"🏦 ইউজারদের মোট ব্যালেন্স: *{round(total_bal,2)} BDT*\n"
+        f"✨━━━━━━━━━━━━━━━━━━✨"
+    )
+    try:
+        bot.send_message(ADMIN_ID, txt, parse_mode="Markdown")
+    except Exception:
+        pass
+    settings["last_weekly_report"] = str(bst_now())
+    save_settings(settings)
+
+
+def _weekly_report_thread():
+    import time as _time
+    while True:
+        _time.sleep(3600)
+        try:
+            last = cfg("last_weekly_report")
+            if last:
+                from datetime import timezone
+                last_dt = datetime.fromisoformat(last).replace(tzinfo=timezone.utc) \
+                          if last else None
+                diff = (datetime.now(timezone.utc) - last_dt).total_seconds()
+                if diff < 7 * 86400:
+                    continue
+            _send_weekly_report()
+        except Exception:
+            pass
 
 
 # ─────────────────────────────────────────────
@@ -5499,6 +5731,11 @@ if __name__ == "__main__":
     except Exception: pass
 
     print("🚀 Prime Bazar Bot is starting...")
+
+    # Weekly auto-report background thread
+    import threading as _threading
+    _wr_thread = _threading.Thread(target=_weekly_report_thread, daemon=True)
+    _wr_thread.start()
 
     # Drop any pending webhook (resolves 409 conflicts from old instances)
     try:
