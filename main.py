@@ -2240,6 +2240,25 @@ def _mail_execute(call, uid, p_name, qty, total, mode, S):
                          parse_mode="Markdown")
 
 
+def _low_stock_alert(p_name, remaining):
+    """স্টক ২০-এর নিচে নামলে Admin-কে একবার সতর্ক করে।"""
+    threshold = 20
+    if remaining < threshold:
+        try:
+            bot.send_message(
+                ADMIN_ID,
+                f"⚠️ *Low Stock Alert!*\n"
+                f"✨━━━━━━━━━━━━━━━━━━✨\n"
+                f"📦 প্রোডাক্ট: *{p_name}*\n"
+                f"🔢 বাকি স্টক: *{remaining} পিস*\n"
+                f"✨━━━━━━━━━━━━━━━━━━✨\n"
+                f"📥 দ্রুত স্টক আপলোড করুন!",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+
+
 def _record_sold_rows(p_name, sold_rows, uid):
     """Tag delivered account rows with buyer/date metadata and archive them
     in the 'sold_stock' collection so the admin can later export used vs.
@@ -2268,6 +2287,7 @@ def _deliver_mail_text(uid, p_name, qty, total, S):
     to_send   = available[:qty]
     remaining = rows[qty:]
     db_save_stock(p_name, remaining)
+    _low_stock_alert(p_name, len(remaining))
     _record_sold_rows(p_name, rows[:qty], uid)
     accounts_text = "\n".join(f"`{str(a)}`" for a in to_send)
     msg = (
@@ -2289,6 +2309,7 @@ def _deliver_mail_xlsx(uid, p_name, qty, total, S):
     to_send   = rows[:qty]
     remaining = rows[qty:]
     db_save_stock(p_name, remaining)
+    _low_stock_alert(p_name, len(remaining))
     _record_sold_rows(p_name, to_send, uid)
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine="openpyxl") as writer:
@@ -2540,6 +2561,7 @@ def _deliver_mail(uid, call, p_name, qty, total, success_msg, S):
     to_send   = rows[:qty]
     remaining = rows[qty:]
     db_save_stock(p_name, remaining)
+    _low_stock_alert(p_name, len(remaining))
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine="openpyxl") as writer:
         pd.DataFrame(to_send).to_excel(writer, index=False)
