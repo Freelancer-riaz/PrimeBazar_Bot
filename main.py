@@ -3360,6 +3360,7 @@ def admin_panel_markup():
         types.InlineKeyboardButton("🔄 Sync Stock",      callback_data="adm|syncstock"),
     )
     mk.add(
+        types.InlineKeyboardButton("✏️ Stock Manager",   callback_data="adm|stockmgr"),
         types.InlineKeyboardButton("📊 Mail Report",     callback_data="adm|mailreport"),
     )
 
@@ -3445,6 +3446,7 @@ def admin_router(call):
         "manual_orders": _adm_manual_orders,
         "mailreport":    _adm_mailreport_select,
         "subadmins":     _adm_subadmins,
+        "stockmgr":      _adm_stockmgr,
     }.get(action, lambda _: None)(call)
 
     if action == "addstock":
@@ -5167,6 +5169,151 @@ def prod_delete(call):
         bot.edit_message_text(f"🗑️ *{p_name}* deleted.",
                               ADMIN_ID, call.message.message_id, parse_mode="Markdown")
     else: bot.answer_callback_query(call.id, "❌ Not found.")
+
+
+# ─────────────────────────────────────────────
+#  Stock Manager (edit / delete / replace stock)
+# ─────────────────────────────────────────────
+def _adm_stockmgr(call):
+    """প্রোডাক্ট সিলেক্ট করার স্ক্রিন।"""
+    prods = get_products()
+    mk    = types.InlineKeyboardMarkup(row_width=2)
+    btns  = [
+        types.InlineKeyboardButton(
+            f"{p} ({get_stock_count(p)})",
+            callback_data=f"smgr|sel|{p}"
+        ) for p in prods
+    ]
+    if btns: mk.add(*btns)
+    mk.add(types.InlineKeyboardButton("🔙 Back", callback_data="adm|back"))
+    txt = (
+        "✏️ *Stock Manager*\n"
+        "✨━━━━━━━━━━━━━━━━━━✨\n"
+        "কোন প্রোডাক্টের স্টক এডিট করতে চান?"
+    )
+    try:
+        bot.edit_message_text(txt, ADMIN_ID, call.message.message_id,
+                              reply_markup=mk, parse_mode="Markdown")
+    except Exception:
+        bot.send_message(ADMIN_ID, txt, reply_markup=mk, parse_mode="Markdown")
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("smgr|"))
+def stockmgr_router(call):
+    if call.message.chat.id != ADMIN_ID: return
+    parts  = call.data.split("|", 2)
+    action = parts[1]
+    p_name = parts[2] if len(parts) > 2 else ""
+    bot.answer_callback_query(call.id)
+
+    def _options_markup(p):
+        cnt = get_stock_count(p)
+        mk2 = types.InlineKeyboardMarkup(row_width=1)
+        mk2.add(
+            types.InlineKeyboardButton(
+                f"📥 স্টক ডাউনলোড করুন ({cnt} পিস)",
+                callback_data=f"smgr|dl|{p}"),
+            types.InlineKeyboardButton(
+                "🔁 স্টক রিপ্লেস করুন (xlsx আপলোড করুন)",
+                callback_data=f"smgr|replace|{p}"),
+            types.InlineKeyboardButton(
+                "🗑️ পুরো স্টক মুছে দিন",
+                callback_data=f"smgr|delconfirm|{p}"),
+            types.InlineKeyboardButton("🔙 Back", callback_data="adm|stockmgr"),
+        )
+        return mk2
+
+    if action == "sel":
+        cnt = get_stock_count(p_name)
+        txt = (
+            f"✏️ *{p_name}*\n"
+            f"✨━━━━━━━━━━━━━━━━━━✨\n"
+            f"📦 বর্তমান স্টক: *{cnt} পিস*\n"
+            f"✨━━━━━━━━━━━━━━━━━━✨\n"
+            "নিচের অপশনগুলো থেকে বেছে নিন:"
+        )
+        try:
+            bot.edit_message_text(txt, ADMIN_ID, call.message.message_id,
+                                  reply_markup=_options_markup(p_name), parse_mode="Markdown")
+        except Exception:
+            bot.send_message(ADMIN_ID, txt, reply_markup=_options_markup(p_name), parse_mode="Markdown")
+
+    elif action == "dl":
+        rows = _load_stock_rows(p_name)
+        if not rows:
+            bot.send_message(ADMIN_ID, f"❌ *{p_name}* এর কোনো স্টক নেই।", parse_mode="Markdown"); return
+        out = io.BytesIO()
+        with pd.ExcelWriter(out, engine="openpyxl") as writer:
+            pd.DataFrame(rows).to_excel(writer, index=False)
+        out.seek(0)
+        bot.send_document(
+            ADMIN_ID, out,
+            visible_file_name=f"{p_name}_stock.xlsx",
+            caption=(
+                f"📥 *{p_name}* — বর্তমান স্টক ({len(rows)} পিস)\n"
+                f"✏️ ফাইলটি এডিট করে *রিপ্লেস* অপশনে আপলোড করুন।"
+            ),
+            parse_mode="Markdown"
+        )
+
+    elif action == "replace":
+        msg = bot.send_message(
+            ADMIN_ID,
+            f"📁 *{p_name}* — এডিট করা নতুন Excel (.xlsx) ফাইল পাঠান।\n"
+            f"⚠️ এটি পুরনো সমস্ত স্টক বদলে দেবে।",
+            parse_mode="Markdown"
+        )
+        bot.register_next_step_handler(msg, _smgr_do_replace, p_name)
+
+    elif action == "delconfirm":
+        mk2 = types.InlineKeyboardMarkup(row_width=2)
+        mk2.add(
+            types.InlineKeyboardButton("✅ হ্যাঁ, মুছে দিন", callback_data=f"smgr|deldo|{p_name}"),
+            types.InlineKeyboardButton("❌ না, বাতিল", callback_data=f"smgr|sel|{p_name}"),
+        )
+        cnt = get_stock_count(p_name)
+        txt = (
+            f"⚠️ *নিশ্চিত করুন*\n"
+            f"✨━━━━━━━━━━━━━━━━━━✨\n"
+            f"📦 *{p_name}* এর সমস্ত *{cnt} পিস* স্টক মুছে দিতে চান?\n"
+            f"এই কাজটি পূর্বাবস্থায় ফেরানো যাবে না!"
+        )
+        try:
+            bot.edit_message_text(txt, ADMIN_ID, call.message.message_id,
+                                  reply_markup=mk2, parse_mode="Markdown")
+        except Exception:
+            bot.send_message(ADMIN_ID, txt, reply_markup=mk2, parse_mode="Markdown")
+
+    elif action == "deldo":
+        db_delete_stock(p_name)
+        bot.send_message(
+            ADMIN_ID,
+            f"🗑️ *{p_name}* এর সমস্ত স্টক মুছে দেওয়া হয়েছে।",
+            parse_mode="Markdown"
+        )
+
+
+def _smgr_do_replace(message, p_name):
+    """ইউজার নতুন xlsx পাঠালে পুরনো স্টক বদলে দাও।"""
+    if message.chat.id != ADMIN_ID: return
+    if not message.document:
+        bot.send_message(ADMIN_ID, "❌ Excel (.xlsx) ফাইল পাঠান।"); return
+    file_info  = bot.get_file(message.document.file_id)
+    downloaded = bot.download_file(file_info.file_path)
+    try:
+        df   = pd.read_excel(io.BytesIO(downloaded), header=0)
+        rows = df.to_dict("records")
+    except Exception:
+        bot.send_message(ADMIN_ID, "❌ ফাইল পড়া যায়নি। সঠিক Excel (.xlsx) ফাইল পাঠান।"); return
+    if not rows:
+        bot.send_message(ADMIN_ID, "❌ ফাইলে কোনো ডেটা নেই।"); return
+    db_save_stock(p_name, rows)
+    bot.send_message(
+        ADMIN_ID,
+        f"✅ *{p_name}* এর স্টক সফলভাবে রিপ্লেস হয়েছে!\n"
+        f"📦 নতুন স্টক: *{len(rows)} পিস*",
+        parse_mode="Markdown"
+    )
 
 
 # ─────────────────────────────────────────────
