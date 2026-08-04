@@ -5,28 +5,39 @@
 
 import os
 
-# ════════════════ ⚙️  CONFIG — নিচের values পরিবর্তন করুন ════════════════
+# ════════════════ ⚙️  CONFIG — VPS-এ আপলোডের আগে এখানে আপনার values বসান ════
+#
+#  🖥️  VPS-এ চালাতে হলে: নিচের "YOUR_..._HERE" গুলো real values দিয়ে বদলান।
+#  🧪  Replit-এ test করতে হলে: Replit Secrets-এ values থাকলে auto-নেবে।
+#
+# ─────────────────────────────────────────────────────────────────────────────
 
 # Telegram Bot Token (BotFather থেকে)
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 
 # আপনার Telegram numeric ID (@userinfobot দিয়ে বের করুন)
-ADMIN_ID = 7522357347
+ADMIN_ID = int(os.environ.get("ADMIN_ID", "7522357347"))
 
 # Pyrogram Userbot — my.telegram.org থেকে নিন
-USER_API_ID   = "YOUR_API_ID_HERE"
-USER_API_HASH = "YOUR_API_HASH_HERE"
+USER_API_ID   = os.environ.get("USER_API_ID",   "YOUR_API_ID_HERE")
+USER_API_HASH = os.environ.get("USER_API_HASH",  "YOUR_API_HASH_HERE")
 # Pyrogram StringSession (একবার generate করলেই হবে)
-USER_SESSION_STRING = "YOUR_SESSION_STRING_HERE"
+USER_SESSION_STRING = os.environ.get("USER_SESSION_STRING", "YOUR_SESSION_STRING_HERE")
 
 # MongoDB Atlas URI — mongodb+srv://user:pass@cluster.mongodb.net/prime_bazar
-MONGODB_URI = "YOUR_MONGODB_URI_HERE"
+MONGODB_URI = (
+    os.environ.get("MONGODB_URI")
+    or os.environ.get("MONGO_URI")
+    or "YOUR_MONGODB_URI_HERE"
+)
 
 # Flask port (VPS-এ সাধারণত দরকার নেই, পরিবর্তন করতে হবে না)
-PORT = 3000
+PORT = int(os.environ.get("PORT", 3000))
 
 # App Domain — webhook/OTP feature থাকলে বসান, না থাকলে খালি রাখুন
-APP_DOMAIN = ""
+APP_DOMAIN = os.environ.get("APP_DOMAIN", "")
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ══════════════════════════════════════════════════════════════════════════════
 
