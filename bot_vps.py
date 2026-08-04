@@ -5,43 +5,22 @@
 
 import os
 
-# ════════════════ ⚙️  CONFIG — VPS-এ আপলোডের আগে এখানে আপনার values বসান ════
-#
-#  🖥️  VPS-এ চালাতে হলে: নিচের "YOUR_..._HERE" গুলো real values দিয়ে বদলান।
-#  🧪  Replit-এ test করতে হলে: Replit Secrets-এ values থাকলে auto-নেবে।
-#
-# ─────────────────────────────────────────────────────────────────────────────
+# ════════════════ ⚙️  CONFIG — নিচের values পরিবর্তন করুন ════════════════
+#  🖥️  VPS: "YOUR_..._HERE" গুলো real values দিয়ে বদলান
+#  🧪  Replit: Replit Secrets-এ values থাকলে auto-নেবে
 
-# Telegram Bot Token (BotFather থেকে)
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-
-# আপনার Telegram numeric ID (@userinfobot দিয়ে বের করুন)
-ADMIN_ID = int(os.environ.get("ADMIN_ID", "7522357347"))
-
-# Pyrogram Userbot — my.telegram.org থেকে নিন
-USER_API_ID   = os.environ.get("USER_API_ID",   "YOUR_API_ID_HERE")
-USER_API_HASH = os.environ.get("USER_API_HASH",  "YOUR_API_HASH_HERE")
-# Pyrogram StringSession (একবার generate করলেই হবে)
+BOT_TOKEN           = os.environ.get("BOT_TOKEN",           "YOUR_BOT_TOKEN_HERE")
+ADMIN_ID            = int(os.environ.get("ADMIN_ID",        "7522357347"))
+USER_API_ID         = os.environ.get("USER_API_ID",         "YOUR_API_ID_HERE")
+USER_API_HASH       = os.environ.get("USER_API_HASH",       "YOUR_API_HASH_HERE")
 USER_SESSION_STRING = os.environ.get("USER_SESSION_STRING", "YOUR_SESSION_STRING_HERE")
+MONGODB_URI         = (os.environ.get("MONGODB_URI") or os.environ.get("MONGO_URI") or "YOUR_MONGODB_URI_HERE")
+PORT                = int(os.environ.get("PORT", 3000))
+APP_DOMAIN          = os.environ.get("APP_DOMAIN", "")
 
-# MongoDB Atlas URI — mongodb+srv://user:pass@cluster.mongodb.net/prime_bazar
-MONGODB_URI = (
-    os.environ.get("MONGODB_URI")
-    or os.environ.get("MONGO_URI")
-    or "YOUR_MONGODB_URI_HERE"
-)
+# ═══════════════════════════════════════════════════════════════
 
-# Flask port (VPS-এ সাধারণত দরকার নেই, পরিবর্তন করতে হবে না)
-PORT = int(os.environ.get("PORT", 3000))
-
-# App Domain — webhook/OTP feature থাকলে বসান, না থাকলে খালি রাখুন
-APP_DOMAIN = os.environ.get("APP_DOMAIN", "")
-
-# ─────────────────────────────────────────────────────────────────────────────
-
-# ══════════════════════════════════════════════════════════════════════════════
-
-# ════════════════ 🗄️  MONGODB HELPER (inlined) ═══════════════════════════
+# ════════ 🗄️  MONGODB HELPER ══════════════════════════════════════════════
 
 from pymongo import MongoClient, UpdateOne
 from pymongo.errors import PyMongoError
@@ -266,8 +245,6 @@ def db_load_stock(p_name: str) -> list:
 
 
 def db_save_stock(p_name: str, rows: list):
-    """Replace all stock rows for a product (used after a purchase consumes
-    some rows, leaving the remainder)."""
     try:
         _db()["mail_stock"].replace_one(
             {"_id": p_name}, {"_id": p_name, "rows": rows}, upsert=True
@@ -277,8 +254,6 @@ def db_save_stock(p_name: str, rows: list):
 
 
 def db_append_stock(p_name: str, rows: list):
-    """Append newly uploaded rows to a product's existing stock, keeping any
-    unsold accounts from before."""
     if not rows:
         return
     try:
@@ -351,7 +326,7 @@ def db_append_review(review: dict):
         pass
 
 
-# ════════════════ 🤖  MAIN BOT CODE ════════════════════════════════════════
+# ════════ 🤖  MAIN BOT CODE ════════════════════════════════════════════════
 
 # ═══════════════════════════════════════════════════════════════
 #  Prime Bazar Bot — Dual Engine
@@ -453,211 +428,318 @@ _OTP_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"/>
-<title>Prime Bazar 2Fa &amp; Otp Reader</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+<title>Prime Bazar — 2FA &amp; OTP</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@600&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet"/>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
-  *{margin:0;padding:0;box-sizing:border-box}
-  :root{
-    --bg:#0a0c14;--panel:rgba(255,255,255,0.04);--border:rgba(255,255,255,0.09);
-    --accent:#4a9eff;--accent2:#2563eb;--text:#dde3f0;--muted:#6b7a99;
-    --success:#34c98a;--error:#e05a72;--card:rgba(74,158,255,0.05);
-    --badge:#1a2035;
-  }
-  body{
-    font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);
-    min-height:100vh;padding:16px 14px 48px;
-    background-image:radial-gradient(ellipse at 30% 10%,rgba(37,99,235,0.08) 0%,transparent 55%);
-  }
-  .header{text-align:center;margin-bottom:22px;padding-top:6px}
-  .header .icon{font-size:38px;display:block;margin-bottom:6px}
-  .header h1{font-size:19px;font-weight:700;color:var(--text);letter-spacing:.3px}
-  .header p{font-size:12px;color:var(--muted);margin-top:3px}
-  .section-title{
-    font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.9px;
-    text-transform:uppercase;margin-bottom:10px;display:flex;align-items:center;gap:6px
-  }
-  .glass{
-    background:var(--panel);border:1px solid var(--border);
-    border-radius:14px;padding:16px;margin-bottom:12px;
-  }
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+:root{
+  --bg:#080b12;
+  --surface:#0f1520;
+  --surface2:#141b28;
+  --border:rgba(255,255,255,0.07);
+  --border-active:rgba(99,157,255,0.45);
+  --accent:#639dff;
+  --accent-dark:#3b6fd4;
+  --accent-glow:rgba(99,157,255,0.15);
+  --text:#e8edf8;
+  --text-secondary:#8a96b0;
+  --text-dim:#4a5568;
+  --success:#3dd68c;
+  --success-bg:rgba(61,214,140,0.1);
+  --error:#f06080;
+  --error-bg:rgba(240,96,128,0.08);
+  --warn:#f5a623;
+  --radius:14px;
+  --radius-sm:10px;
+  --radius-xs:7px;
+}
+html,body{height:100%;background:var(--bg)}
+body{
+  font-family:'Inter',sans-serif;color:var(--text);
+  min-height:100vh;padding:0 0 60px;
+  background:
+    radial-gradient(ellipse 70% 40% at 15% 0%,rgba(63,117,255,0.07) 0%,transparent 70%),
+    radial-gradient(ellipse 50% 30% at 85% 100%,rgba(99,157,255,0.05) 0%,transparent 60%),
+    var(--bg);
+}
 
-  /* ── 2FA Section ── */
-  .tfa-row{display:flex;gap:8px;align-items:stretch}
-  .tfa-input{
-    flex:1;background:rgba(0,0,0,0.25);border:1px solid var(--border);
-    border-radius:10px;color:var(--text);font-family:'JetBrains Mono',monospace;
-    font-size:14px;padding:11px 12px;outline:none;
-    transition:border-color .2s;letter-spacing:1px;
-  }
-  .tfa-input:focus{border-color:var(--accent)}
-  .tfa-input::placeholder{color:var(--muted);font-family:'Inter',sans-serif;letter-spacing:0;font-size:13px}
-  .tfa-code-box{
-    background:rgba(0,0,0,0.3);border:1px solid rgba(74,158,255,.2);
-    border-radius:10px;padding:10px 14px;min-width:90px;text-align:center;
-    display:flex;flex-direction:column;justify-content:center;align-items:center;gap:2px;
-  }
-  .tfa-code-label{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px}
-  .tfa-code-val{
-    font-family:'JetBrains Mono',monospace;font-size:22px;font-weight:600;
-    color:var(--accent);letter-spacing:4px;line-height:1.2;
-  }
-  .tfa-code-val.empty{font-size:14px;color:var(--muted);letter-spacing:0}
-  .tfa-clear{
-    display:inline-block;margin-top:8px;font-size:12px;color:var(--muted);
-    cursor:pointer;padding:4px 2px;border:none;background:none;
-    text-decoration:underline;text-underline-offset:3px;
-  }
-  .tfa-clear:hover{color:var(--error)}
-  .copied-toast{
-    font-size:11px;color:var(--success);margin-top:5px;
-    min-height:16px;transition:opacity .3s;
-  }
+/* ── HEADER ── */
+.header{
+  text-align:center;padding:22px 20px 16px;
+  border-bottom:1px solid var(--border);
+  background:linear-gradient(180deg,rgba(99,157,255,0.04) 0%,transparent 100%);
+}
+.header-logo{
+  width:48px;height:48px;border-radius:14px;margin:0 auto 10px;
+  background:linear-gradient(135deg,var(--accent-dark),var(--accent));
+  display:flex;align-items:center;justify-content:center;
+  font-size:22px;box-shadow:0 4px 20px rgba(99,157,255,0.25);
+}
+.header h1{font-size:17px;font-weight:800;letter-spacing:-.2px;color:var(--text)}
+.header p{font-size:11.5px;color:var(--text-secondary);margin-top:3px}
 
-  /* ── Credentials Section ── */
-  textarea{
-    width:100%;background:rgba(0,0,0,0.25);border:1px solid var(--border);
-    border-radius:10px;color:var(--text);font-family:'Inter',sans-serif;
-    font-size:13px;padding:12px;resize:vertical;min-height:100px;outline:none;
-    transition:border-color .2s;line-height:1.6;
-  }
-  textarea:focus{border-color:var(--accent)}
-  textarea::placeholder{color:var(--muted)}
-  .hint{font-size:11px;color:var(--muted);margin-top:7px;line-height:1.5}
-  .hint code{background:rgba(255,255,255,.06);border-radius:4px;padding:1px 5px;
-    font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--accent)}
+/* ── TAB BAR ── */
+.tabs{
+  display:flex;background:var(--surface);
+  border-bottom:1px solid var(--border);padding:0 16px;gap:4px;
+}
+.tab{
+  flex:1;padding:12px 8px 10px;font-size:12px;font-weight:600;
+  color:var(--text-secondary);border:none;background:none;cursor:pointer;
+  border-bottom:2px solid transparent;transition:all .2s;letter-spacing:.2px;
+}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+.tab-panel{display:none;padding:16px 16px 0}
+.tab-panel.active{display:block}
 
-  .row-btns{display:flex;gap:8px;margin-top:8px}
-  .small-btn{
-    flex:1;padding:9px 10px;border:1px solid var(--border);border-radius:10px;
-    background:rgba(255,255,255,.04);color:var(--muted);font-family:'Inter',sans-serif;
-    font-size:12px;font-weight:600;cursor:pointer;transition:all .2s;text-align:center;
-  }
-  .small-btn:hover{border-color:var(--accent);color:var(--accent)}
-  .email-copied{font-size:11px;color:var(--success);margin-top:5px;min-height:15px}
+/* ── CARDS ── */
+.card{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius);padding:16px;margin-bottom:12px;
+  transition:border-color .2s;
+}
+.card:focus-within{border-color:var(--border-active)}
+.card-label{
+  font-size:10px;font-weight:700;color:var(--text-secondary);
+  letter-spacing:1px;text-transform:uppercase;margin-bottom:11px;
+  display:flex;align-items:center;gap:6px;
+}
+.card-label::after{content:'';flex:1;height:1px;background:var(--border)}
 
-  .btn{
-    width:100%;padding:15px;border:none;border-radius:12px;cursor:pointer;
-    font-family:'Inter',sans-serif;font-size:15px;font-weight:700;
-    background:linear-gradient(135deg,var(--accent2),var(--accent));
-    color:#fff;transition:opacity .15s,transform .1s;margin-bottom:12px;
-    display:flex;align-items:center;justify-content:center;gap:8px;
-  }
-  .btn:active{transform:scale(.98);opacity:.9}
-  .btn:disabled{opacity:.45;cursor:not-allowed;transform:none}
-  .spinner{
-    width:16px;height:16px;border:2px solid rgba(255,255,255,.3);
-    border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;display:none;
-  }
-  @keyframes spin{to{transform:rotate(360deg)}}
-  .loading .spinner{display:block}
-  .cooldown-text{font-size:12px;opacity:.7}
+/* ── 2FA ── */
+.tfa-wrap{display:flex;gap:10px;align-items:center}
+.tfa-input-wrap{flex:1;position:relative}
+.tfa-input{
+  width:100%;background:var(--surface2);border:1.5px solid var(--border);
+  border-radius:var(--radius-sm);color:var(--text);
+  font-family:'JetBrains Mono',monospace;font-size:13px;
+  padding:12px 44px 12px 14px;outline:none;letter-spacing:.5px;
+  transition:border-color .2s;
+}
+.tfa-input:focus{border-color:var(--border-active)}
+.tfa-input::placeholder{color:var(--text-dim);font-family:'Inter',sans-serif;letter-spacing:0;font-size:12px}
+.tfa-paste-icon{
+  position:absolute;right:12px;top:50%;transform:translateY(-50%);
+  color:var(--text-secondary);cursor:pointer;font-size:15px;
+  transition:color .15s;user-select:none;
+}
+.tfa-paste-icon:active{color:var(--accent)}
+.tfa-display{
+  background:var(--surface2);border:1.5px solid var(--border);
+  border-radius:var(--radius-sm);min-width:82px;
+  padding:10px 12px;text-align:center;cursor:pointer;
+  transition:border-color .2s,background .2s;flex-shrink:0;
+}
+.tfa-display:active{background:var(--accent-glow);border-color:var(--border-active)}
+.tfa-display .lbl{font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px}
+.tfa-display .code{
+  font-family:'JetBrains Mono',monospace;font-size:20px;font-weight:700;
+  color:var(--accent);letter-spacing:3px;line-height:1;
+}
+.tfa-display .code.empty{font-size:13px;color:var(--text-dim);letter-spacing:0;font-family:'Inter',sans-serif}
+.tfa-timer{height:3px;background:var(--border);border-radius:2px;margin-top:10px;overflow:hidden}
+.tfa-timer-bar{height:100%;background:linear-gradient(90deg,var(--accent-dark),var(--accent));border-radius:2px;transition:width .5s linear}
+.tfa-footer{display:flex;align-items:center;justify-content:space-between;margin-top:8px}
+.tfa-toast{font-size:11px;color:var(--success);min-height:15px;font-weight:500}
+.tfa-clear-btn{
+  font-size:11px;color:var(--text-dim);background:none;border:none;
+  cursor:pointer;padding:3px 0;transition:color .15s;
+}
+.tfa-clear-btn:hover{color:var(--error)}
 
-  /* ── OTP History ── */
-  .otp-history{margin-top:4px}
-  .otp-item{
-    background:var(--badge);border:1px solid var(--border);
-    border-radius:12px;padding:14px 16px;margin-bottom:8px;
-    position:relative;
-  }
-  .otp-item.latest{border-color:rgba(74,158,255,.3);background:rgba(74,158,255,.06)}
-  .otp-badge{
-    position:absolute;top:10px;right:10px;font-size:9px;font-weight:700;
-    color:var(--accent);background:rgba(74,158,255,.12);
-    border-radius:6px;padding:2px 7px;letter-spacing:.5px;text-transform:uppercase;
-  }
-  .otp-subject{font-size:12px;color:var(--muted);margin-bottom:6px;
-    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:85%}
-  .otp-code-big{
-    font-family:'JetBrains Mono',monospace;font-size:30px;font-weight:600;
-    color:var(--text);letter-spacing:5px;line-height:1.2;
-  }
-  .otp-meta{font-size:11px;color:var(--muted);margin-top:5px}
-  .otp-copy-row{display:flex;justify-content:flex-end;margin-top:8px}
-  .otp-copy-btn{
-    padding:6px 14px;border:1px solid rgba(74,158,255,.25);border-radius:8px;
-    background:rgba(74,158,255,.07);color:var(--accent);font-size:12px;font-weight:600;
-    cursor:pointer;transition:all .2s;
-  }
-  .otp-copy-btn:active{background:rgba(52,201,138,.15);border-color:var(--success);color:var(--success)}
-  .error-card{
-    background:rgba(224,90,114,.06);border:1px solid rgba(224,90,114,.2);
-    border-radius:12px;padding:16px;text-align:center;color:var(--error);
-    font-size:13px;line-height:1.5;margin-bottom:8px;
-  }
-  .divider{border:none;border-top:1px solid var(--border);margin:12px 0}
+/* ── CREDENTIALS ── */
+.creds-textarea{
+  width:100%;background:var(--surface2);border:1.5px solid var(--border);
+  border-radius:var(--radius-sm);color:var(--text);font-family:'JetBrains Mono',monospace;
+  font-size:12px;padding:12px 14px;resize:none;height:80px;outline:none;
+  transition:border-color .2s;line-height:1.7;
+}
+.creds-textarea:focus{border-color:var(--border-active)}
+.creds-textarea::placeholder{color:var(--text-dim);font-family:'Inter',sans-serif;font-size:12px}
+.format-hint{
+  font-size:10.5px;color:var(--text-secondary);margin-top:8px;line-height:1.6;
+  background:rgba(99,157,255,0.05);border-radius:var(--radius-xs);
+  padding:8px 10px;border-left:2px solid var(--accent);
+}
+.format-hint code{
+  font-family:'JetBrains Mono',monospace;font-size:10px;
+  color:var(--accent);background:rgba(99,157,255,0.1);
+  border-radius:4px;padding:1px 5px;
+}
+.creds-actions{display:flex;gap:8px;margin-top:10px}
+.action-btn{
+  flex:1;padding:9px 6px;border:1.5px solid var(--border);border-radius:var(--radius-sm);
+  background:var(--surface2);color:var(--text-secondary);
+  font-family:'Inter',sans-serif;font-size:11.5px;font-weight:600;
+  cursor:pointer;transition:all .18s;text-align:center;
+}
+.action-btn:hover,.action-btn:active{border-color:var(--accent);color:var(--accent);background:var(--accent-glow)}
+.creds-status{font-size:11px;color:var(--success);min-height:16px;margin-top:6px;font-weight:500}
+
+/* ── GET CODE BUTTON ── */
+.get-btn{
+  width:100%;padding:15px;border:none;border-radius:var(--radius);cursor:pointer;
+  font-family:'Inter',sans-serif;font-size:15px;font-weight:700;
+  background:linear-gradient(135deg,var(--accent-dark) 0%,var(--accent) 100%);
+  color:#fff;transition:opacity .15s,transform .1s,box-shadow .15s;
+  margin:4px 0 14px;display:flex;align-items:center;justify-content:center;gap:9px;
+  box-shadow:0 4px 16px rgba(99,157,255,0.25);letter-spacing:.2px;
+}
+.get-btn:active{transform:scale(.98);opacity:.9;box-shadow:none}
+.get-btn:disabled{opacity:.4;cursor:not-allowed;transform:none;box-shadow:none}
+.spinner{width:16px;height:16px;border:2px solid rgba(255,255,255,.3);
+  border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;display:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+.cooldown-label{font-size:12.5px;opacity:.75;font-weight:500}
+
+/* ── OTP RESULTS ── */
+.results-wrap{margin-top:2px}
+.otp-card{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius);padding:14px 15px;margin-bottom:10px;
+  position:relative;overflow:hidden;
+}
+.otp-card.latest{border-color:rgba(99,157,255,.3)}
+.otp-card.latest::before{
+  content:'';position:absolute;top:0;left:0;right:0;height:2px;
+  background:linear-gradient(90deg,var(--accent-dark),var(--accent));
+}
+.otp-tag{
+  display:inline-flex;align-items:center;gap:4px;
+  font-size:9.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;
+  color:var(--accent);background:var(--accent-glow);
+  border-radius:5px;padding:2px 8px;margin-bottom:9px;
+}
+.otp-subject{
+  font-size:11.5px;color:var(--text-secondary);margin-bottom:9px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.otp-code-row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.otp-code{
+  font-family:'JetBrains Mono',monospace;font-size:22px;font-weight:700;
+  color:var(--text);letter-spacing:4px;
+}
+.copy-btn{
+  padding:7px 16px;border:1.5px solid var(--border);border-radius:var(--radius-sm);
+  background:var(--surface2);color:var(--text-secondary);
+  font-size:12px;font-weight:600;cursor:pointer;transition:all .18s;
+  white-space:nowrap;flex-shrink:0;
+}
+.copy-btn:active,.copy-btn:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-glow)}
+.otp-meta{font-size:10.5px;color:var(--text-dim);margin-top:8px}
+.error-card{
+  background:var(--error-bg);border:1px solid rgba(240,96,128,.2);
+  border-radius:var(--radius);padding:13px 15px;margin-bottom:10px;
+  font-size:12.5px;color:var(--error);display:flex;align-items:flex-start;gap:8px;line-height:1.5;
+}
+.empty-state{
+  text-align:center;padding:28px 16px;color:var(--text-dim);font-size:13px;
+}
+.empty-icon{font-size:32px;display:block;margin-bottom:8px;opacity:.5}
 </style>
 </head>
 <body>
 <div class="header">
-  <span class="icon">🛡️</span>
-  <h1>Prime Bazar 2Fa &amp; Otp Reader</h1>
-  <p>2FA Code Generator &amp; Email OTP Extractor</p>
+  <div class="header-logo">🛡️</div>
+  <h1>Prime Bazar</h1>
+  <p>2FA Generator &amp; Email OTP Reader</p>
 </div>
 
-<!-- ── 2FA Generator ── -->
-<div class="glass">
-  <div class="section-title">🔐 2FA Code Generator</div>
-  <div class="tfa-row">
-    <input class="tfa-input" id="tfaKey" type="text" placeholder="Paste your 2FA secret key…"
-      autocomplete="off" autocorrect="off" spellcheck="false"/>
-    <div class="tfa-code-box">
-      <div class="tfa-code-label">Code</div>
-      <div class="tfa-code-val empty" id="tfaCode">——</div>
+<div class="tabs">
+  <button class="tab active" onclick="switchTab('tfa',this)">🔐 2FA</button>
+  <button class="tab" onclick="switchTab('otp',this)">📧 OTP Email</button>
+</div>
+
+<!-- ══ TAB: 2FA ══ -->
+<div id="tab-tfa" class="tab-panel active">
+  <div class="card">
+    <div class="card-label">🔑 Secret Key</div>
+    <div class="tfa-wrap">
+      <div class="tfa-input-wrap">
+        <input class="tfa-input" id="tfaKey" type="text"
+          placeholder="2FA secret key paste করুন…"
+          autocomplete="off" autocorrect="off" spellcheck="false"
+          oninput="onTFAInput()"/>
+        <span class="tfa-paste-icon" onclick="pasteTFA()" title="Paste">📋</span>
+      </div>
+      <div class="tfa-display" id="tfaDisplay" onclick="copyTFACode()">
+        <div class="lbl">Code</div>
+        <div class="code empty" id="tfaCode">——</div>
+      </div>
+    </div>
+    <div class="tfa-timer"><div class="tfa-timer-bar" id="tfaBar" style="width:100%"></div></div>
+    <div class="tfa-footer">
+      <button class="tfa-clear-btn" onclick="clearTFA()">✕ Clear</button>
+      <div class="tfa-toast" id="tfaToast"></div>
     </div>
   </div>
-  <div style="display:flex;align-items:center;justify-content:space-between">
-    <button class="tfa-clear" onclick="clearTFA()">✕ Clear</button>
-    <div class="copied-toast" id="tfaToast"></div>
+  <div class="empty-state" id="tfaHint">
+    <span class="empty-icon">🔐</span>
+    2FA secret key paste করুন —<br/>code auto-generate হবে
   </div>
 </div>
 
-<hr class="divider"/>
-
-<!-- ── Email OTP Reader ── -->
-<div class="glass">
-  <div class="section-title">📧 Email OTP Reader</div>
-  <textarea id="inp" placeholder="email@outlook.com|password|refresh_token|client_id"
-    autocomplete="off" autocorrect="off" spellcheck="false"
-    oninput="onCredsInput()" onpaste="onCredsPaste()"></textarea>
-  <p class="hint">Format: <code>email</code> | <code>password</code> | <code>refresh_token</code> | <code>client_id</code> — separated by <code>|</code></p>
-  <div class="row-btns">
-    <button class="small-btn" onclick="clearCreds()">🗑 Clean Box</button>
+<!-- ══ TAB: OTP EMAIL ══ -->
+<div id="tab-otp" class="tab-panel">
+  <div class="card">
+    <div class="card-label">📬 Credentials</div>
+    <textarea class="creds-textarea" id="inp"
+      placeholder="email@outlook.com|password|refresh_token|client_id"
+      autocomplete="off" autocorrect="off" spellcheck="false"
+      oninput="onCredsChange()" onpaste="setTimeout(onCredsChange,50)"></textarea>
+    <p class="format-hint">
+      Format: <code>email</code> | <code>password</code> | <code>refresh_token</code> | <code>client_id</code>
+    </p>
+    <div class="creds-actions">
+      <button class="action-btn" onclick="pasteCreds()">📋 Paste</button>
+      <button class="action-btn" onclick="copyCreds()">📄 Copy</button>
+      <button class="action-btn" onclick="clearCreds()">🗑 Clear</button>
+    </div>
+    <div class="creds-status" id="emailStatus"></div>
   </div>
-  <div class="email-copied" id="emailCopied"></div>
+
+  <button class="get-btn" id="fetchBtn" onclick="getOTP()">
+    <span class="spinner" id="spinner"></span>
+    <span id="btnLabel">⚡ Get OTP Code</span>
+  </button>
+
+  <div id="otpResults" class="results-wrap">
+    <div class="empty-state">
+      <span class="empty-icon">📧</span>
+      Credentials দিয়ে<br/>Get OTP Code চাপুন
+    </div>
+  </div>
 </div>
-
-<button class="btn" id="fetchBtn" onclick="getOTP()">
-  <span class="spinner" id="spinner"></span>
-  <span id="btnLabel">⚡ GET CODE</span>
-</button>
-
-<div id="otpHistory" class="otp-history"></div>
 
 <script>
-const tg = window.Telegram && window.Telegram.WebApp;
-if(tg){ tg.ready(); tg.expand(); }
+const tg=window.Telegram&&window.Telegram.WebApp;
+if(tg){tg.ready();tg.expand();}
 
-// ─── OTP history (newest first, max 5) ───
-let otpHistory = [];
+// ══ TAB SWITCH ══
+function switchTab(name,el){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('tab-'+name).classList.add('active');
+}
 
-// ─── 2FA TOTP ───
+// ══ 2FA TOTP ══
 function b32Decode(s){
-  const alpha='ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-  let bits=0,val=0; const out=[];
+  const a='ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits=0,val=0;const out=[];
   for(const c of s.replace(/=+$/,'').toUpperCase()){
-    const i=alpha.indexOf(c); if(i===-1) continue;
-    val=(val<<5)|i; bits+=5;
+    const i=a.indexOf(c);if(i===-1)continue;
+    val=(val<<5)|i;bits+=5;
     if(bits>=8){bits-=8;out.push((val>>bits)&0xff);}
   }
   return new Uint8Array(out);
 }
-
 async function genTOTP(secret){
   const key=b32Decode(secret.replace(/\\s/g,''));
-  if(!key.length) return null;
+  if(!key.length)return null;
   const step=Math.floor(Date.now()/1000/30);
   const buf=new ArrayBuffer(8);
   new DataView(buf).setUint32(4,step,false);
@@ -668,162 +750,182 @@ async function genTOTP(secret){
   return code.toString().padStart(6,'0');
 }
 
-let tfaTimer=null;
-document.getElementById('tfaKey').addEventListener('input',async function(){
+let tfaTimer=null,tfaInterval=null,_lastTFASecret='';
+function onTFAInput(){
   clearTimeout(tfaTimer);
-  const k=this.value.trim();
-  const el=document.getElementById('tfaCode');
-  if(!k){el.textContent='——';el.className='tfa-code-val empty';return;}
-  tfaTimer=setTimeout(async()=>{
-    try{
-      const code=await genTOTP(k);
-      if(!code){el.textContent='——';el.className='tfa-code-val empty';return;}
-      el.textContent=code;el.className='tfa-code-val';
-      navigator.clipboard.writeText(code).then(()=>{
-        const t=document.getElementById('tfaToast');
-        t.textContent='✅ '+code+' copied!';
-        setTimeout(()=>{t.textContent='';},3000);
-      }).catch(()=>{});
-    }catch(e){el.textContent='——';el.className='tfa-code-val empty';}
-  },300);
-});
+  const k=document.getElementById('tfaKey').value.trim();
+  _lastTFASecret=k;
+  if(!k){resetTFA();return;}
+  document.getElementById('tfaHint').style.display='none';
+  tfaTimer=setTimeout(()=>refreshTFACode(),300);
+}
+async function refreshTFACode(){
+  const k=_lastTFASecret;
+  if(!k)return;
+  try{
+    const code=await genTOTP(k);
+    const el=document.getElementById('tfaCode');
+    if(!code){el.textContent='——';el.className='code empty';return;}
+    el.textContent=code;el.className='code';
+    updateTFABar();
+  }catch(e){}
+}
+function updateTFABar(){
+  const rem=(30-(Math.floor(Date.now()/1000)%30))/30*100;
+  document.getElementById('tfaBar').style.width=rem+'%';
+}
+// refresh code every second for live timer
+setInterval(()=>{
+  if(_lastTFASecret)refreshTFACode();
+  if(_lastTFASecret)updateTFABar();
+},1000);
 
+function resetTFA(){
+  const el=document.getElementById('tfaCode');
+  el.textContent='——';el.className='code empty';
+  document.getElementById('tfaBar').style.width='100%';
+  document.getElementById('tfaHint').style.display='block';
+}
 function clearTFA(){
   document.getElementById('tfaKey').value='';
-  const el=document.getElementById('tfaCode');
-  el.textContent='——';el.className='tfa-code-val empty';
+  _lastTFASecret='';resetTFA();
   document.getElementById('tfaToast').textContent='';
 }
-
-// ─── Credentials / Email auto-copy ───
-function extractEmail(raw){
-  const parts=raw.split('|');
-  const m=(parts[0]||'').trim();
-  return /^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(m)?m:null;
+async function pasteTFA(){
+  try{
+    const t=await navigator.clipboard.readText();
+    document.getElementById('tfaKey').value=t.trim();
+    _lastTFASecret=t.trim();
+    document.getElementById('tfaHint').style.display='none';
+    await refreshTFACode();
+  }catch(e){document.getElementById('tfaKey').focus();}
+}
+async function copyTFACode(){
+  const code=document.getElementById('tfaCode').textContent;
+  if(!code||code==='——')return;
+  try{
+    await navigator.clipboard.writeText(code);
+    const t=document.getElementById('tfaToast');
+    t.textContent='✅ '+code+' copied!';
+    if(tg&&tg.HapticFeedback)tg.HapticFeedback.notificationOccurred('success');
+    setTimeout(()=>{t.textContent='';},2500);
+  }catch(e){}
 }
 
-function onCredsInput(){
+// ══ CREDENTIALS ══
+function onCredsChange(){
   const raw=document.getElementById('inp').value;
-  const email=extractEmail(raw);
-  const el=document.getElementById('emailCopied');
-  if(email){
-    navigator.clipboard.writeText(email).then(()=>{
-      el.textContent='📋 Email copied: '+email;
-      setTimeout(()=>{el.textContent='';},3000);
-    }).catch(()=>{});
+  const parts=raw.split('|');
+  const email=(parts[0]||'').trim();
+  const st=document.getElementById('emailStatus');
+  if(/^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(email)){
+    st.textContent='📧 '+email;
+    navigator.clipboard.writeText(email).catch(()=>{});
   } else {
-    el.textContent='';
+    st.textContent='';
   }
 }
-
-function onCredsPaste(){
-  setTimeout(onCredsInput,50);
+async function pasteCreds(){
+  try{
+    const t=await navigator.clipboard.readText();
+    document.getElementById('inp').value=t;
+    onCredsChange();
+  }catch(e){document.getElementById('inp').focus();}
 }
-
+function copyCreds(){
+  const v=document.getElementById('inp').value;
+  if(!v)return;
+  navigator.clipboard.writeText(v).then(()=>{
+    const st=document.getElementById('emailStatus');
+    st.textContent='✅ Copied!';
+    setTimeout(()=>onCredsChange(),1500);
+  }).catch(()=>{});
+}
 function clearCreds(){
   document.getElementById('inp').value='';
-  document.getElementById('emailCopied').textContent='';
+  document.getElementById('emailStatus').textContent='';
 }
 
-// ─── GET CODE with 3-sec cooldown ───
+// ══ GET OTP ══
 let cooldownActive=false;
-let cooldownInterval=null;
-
 async function getOTP(){
-  if(cooldownActive) return;
+  if(cooldownActive)return;
   const raw=document.getElementById('inp').value.trim();
-  if(!raw){showError('Please enter your credentials.');return;}
+  if(!raw){showError('Credentials দিন।');return;}
   const parts=raw.split('|').map(s=>s.trim());
-  if(parts.length<4){showError('Invalid format. Need: email|pass|refresh_token|client_id');return;}
-
+  if(parts.length<4){showError('Format ঠিক নেই: email|password|refresh_token|client_id');return;}
   setLoading(true);
   try{
-    const fd=new FormData();
-    fd.append('data',raw);
+    const fd=new FormData();fd.append('data',raw);
     const res=await fetch('/get-otp-api',{method:'POST',body:fd});
     const json=await res.json();
-    if(json.error){showError(json.error);}
-    else{addToHistory(json);}
-  }catch(e){
-    showError('Network error: '+e.message);
-  }finally{
-    setLoading(false);
-    startCooldown();
-  }
+    if(json.error)showError(json.error);
+    else addResult(json);
+  }catch(e){showError('Network error: '+e.message);}
+  finally{setLoading(false);startCooldown();}
 }
-
-function startCooldown(){
-  cooldownActive=true;
-  let secs=3;
-  const btn=document.getElementById('fetchBtn');
-  const lbl=document.getElementById('btnLabel');
-  btn.disabled=true;
-  lbl.innerHTML='<span class="cooldown-text">Wait '+secs+'s…</span>';
-  cooldownInterval=setInterval(()=>{
-    secs--;
-    if(secs<=0){
-      clearInterval(cooldownInterval);
-      cooldownActive=false;
-      btn.disabled=false;
-      lbl.textContent='⚡ GET CODE';
-    } else {
-      lbl.innerHTML='<span class="cooldown-text">Wait '+secs+'s…</span>';
-    }
-  },1000);
-}
-
 function setLoading(on){
   const btn=document.getElementById('fetchBtn');
   const sp=document.getElementById('spinner');
   btn.disabled=on;
-  if(on){sp.style.display='block';document.getElementById('btnLabel').textContent='Fetching…';}
-  else{sp.style.display='none';}
+  sp.style.display=on?'block':'none';
+  if(on)document.getElementById('btnLabel').textContent='Fetching…';
+  else document.getElementById('btnLabel').textContent='⚡ Get OTP Code';
+}
+function startCooldown(){
+  cooldownActive=true;let secs=3;
+  const btn=document.getElementById('fetchBtn');
+  const lbl=document.getElementById('btnLabel');
+  btn.disabled=true;
+  lbl.innerHTML='<span class="cooldown-label">⏳ Wait '+secs+'s</span>';
+  const iv=setInterval(()=>{
+    secs--;
+    if(secs<=0){clearInterval(iv);cooldownActive=false;btn.disabled=false;lbl.textContent='⚡ Get OTP Code';}
+    else lbl.innerHTML='<span class="cooldown-label">⏳ Wait '+secs+'s</span>';
+  },1000);
 }
 
-// ─── OTP History (newest first, max 5) ───
-function addToHistory(d){
-  otpHistory.unshift(d);
-  if(otpHistory.length>5) otpHistory=otpHistory.slice(0,5);
-  renderHistory();
+let otpList=[];
+function addResult(d){
+  otpList.unshift(d);
+  if(otpList.length>5)otpList=otpList.slice(0,5);
+  renderResults();
 }
-
 function showError(msg){
-  const hist=document.getElementById('otpHistory');
-  const err=document.createElement('div');
-  err.className='error-card';
-  err.innerHTML='⚠️ '+esc(msg);
-  hist.prepend(err);
-  setTimeout(()=>{if(err.parentNode)err.parentNode.removeChild(err);},6000);
+  const wrap=document.getElementById('otpResults');
+  const el=document.createElement('div');
+  el.className='error-card';
+  el.innerHTML='⚠️ <span>'+esc(msg)+'</span>';
+  wrap.prepend(el);
+  setTimeout(()=>{if(el.parentNode)el.remove();},6000);
 }
-
-function renderHistory(){
-  const hist=document.getElementById('otpHistory');
-  hist.innerHTML='';
-  otpHistory.forEach((d,i)=>{
+function renderResults(){
+  const wrap=document.getElementById('otpResults');
+  wrap.innerHTML='';
+  otpList.forEach((d,i)=>{
     const fmt=d.received?new Date(d.received).toLocaleString('en-BD',{timeZone:'Asia/Dhaka',hour12:true}):'—';
     const div=document.createElement('div');
-    div.className='otp-item'+(i===0?' latest':'');
-    div.innerHTML=`
-      ${i===0?'<div class="otp-badge">Latest</div>':''}
-      <div class="otp-subject">📩 ${esc(d.subject||'—')}</div>
-      <div class="otp-code-big">${esc(d.code||'—')}</div>
-      <div class="otp-meta">👤 ${esc(d.sender||'—')} &nbsp;·&nbsp; 🕒 ${esc(fmt)}</div>
-      <div class="otp-copy-row">
-        <button class="otp-copy-btn" onclick="copyOTP(this,'${esc(d.code||'')}')">📋 Copy</button>
-      </div>`;
-    hist.appendChild(div);
+    div.className='otp-card'+(i===0?' latest':'');
+    div.innerHTML=(i===0?'<div class="otp-tag">✨ Latest</div>':'')
+      +'<div class="otp-subject">📩 '+esc(d.subject||'—')+'</div>'
+      +'<div class="otp-code-row">'
+      +  '<span class="otp-code">'+esc(d.code||'—')+'</span>'
+      +  '<button class="copy-btn" onclick="copyCode(this,\''+esc(d.code||'')+'\')">📋 Copy</button>'
+      +'</div>'
+      +'<div class="otp-meta">👤 '+esc(d.sender||'—')+' &nbsp;·&nbsp; 🕒 '+esc(fmt)+'</div>';
+    wrap.appendChild(div);
   });
 }
-
-function copyOTP(btn,code){
-  navigator.clipboard.writeText(code).then(()=>{
-    btn.textContent='✅ Copied!';
-    btn.style.color='var(--success)';
-    if(tg&&tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
-    setTimeout(()=>{btn.textContent='📋 Copy';btn.style.color='';},2000);
-  }).catch(()=>{btn.textContent='❌ Failed';setTimeout(()=>{btn.textContent='📋 Copy';},2000);});
+async function copyCode(btn,code){
+  if(!code)return;
+  try{
+    await navigator.clipboard.writeText(code);
+    btn.textContent='✅ Copied';
+    btn.style.borderColor='var(--success)';btn.style.color='var(--success)';
+    if(tg&&tg.HapticFeedback)tg.HapticFeedback.notificationOccurred('success');
+    setTimeout(()=>{btn.textContent='📋 Copy';btn.style.borderColor='';btn.style.color='';},2000);
+  }catch(e){btn.textContent='❌ Failed';setTimeout(()=>{btn.textContent='📋 Copy';},2000);}
 }
-
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 </script>
 </body>
@@ -867,7 +969,7 @@ def keep_alive():
 
 
 # ─────────────────────────────────────────────
-#  Core Config  (ফাইলের উপর থেকে নেওয়া)
+#  Core Config (from CONFIG section at top)
 # ─────────────────────────────────────────────
 API_TOKEN     = BOT_TOKEN
 USER_API_ID   = USER_API_ID
@@ -876,7 +978,7 @@ USER_SESSION  = USER_SESSION_STRING
 _REPLIT_DOMAIN = APP_DOMAIN
 
 if not API_TOKEN or API_TOKEN == "YOUR_BOT_TOKEN_HERE":
-    raise ValueError("BOT_TOKEN সেট করা নেই! ফাইলের উপরে BOT_TOKEN = \"...\" এর জায়গায় আপনার token বসান।")
+    raise ValueError("BOT_TOKEN সেট করা নেই! ফাইলের উপরে BOT_TOKEN এর real value বসান।")
 
 bot = telebot.TeleBot(API_TOKEN, parse_mode=None)
 
@@ -4630,20 +4732,40 @@ def usrmgr_router(call):
         if action == "list10":   subset = uids[-10:];  title = "Last 10"
         elif action == "list20": subset = uids[-20:];  title = "Last 20"
         else:                    subset = uids;        title = f"All {len(uids)}"
-        def _fmt(uid):
+        # Build XLSX with full user details
+        rows = []
+        for uid in subset:
             u = user_data[uid]
-            un = u.get("username","") or u.get("first_name","") or ""
-            return (f"`{uid}`{' ('+un+')' if un else ''} — "
-                    f"💰{u.get('balance',0)} BDT "
-                    f"{'🚫' if u.get('banned') else '✅'}")
-        lines = [_fmt(uid) for uid in subset]
-        # Telegram message limit: split into chunks of 50
-        chunk = 50
-        for i in range(0, max(len(lines), 1), chunk):
-            part = lines[i:i+chunk]
-            hdr = f"📋 *{title} Users:*\n✨━━━━━━━━━━━━✨\n" if i == 0 else ""
-            bot.send_message(ADMIN_ID, hdr + ("\n".join(part) if part else "No users yet."),
-                             parse_mode="Markdown")
+            raw_un = u.get("username", "") or ""
+            username = ("@" + raw_un.lstrip("@")) if raw_un.strip() else "—"
+            rows.append({
+                "Telegram ID":       uid,
+                "Username":          username,
+                "Name":              u.get("first_name", "") or "—",
+                "Balance (BDT)":     u.get("balance", 0),
+                "Total Deposit (BDT)": u.get("total_deposit", 0),
+                "Total Orders":      u.get("total_orders", 0),
+                "Status":            "🚫 Banned" if u.get("banned") else "✅ Active",
+                "Language":          u.get("language", "bn"),
+                "Last Deposit":      u.get("last_deposit_time") or "—",
+                "Last Purchase":     u.get("last_purchase_time") or "—",
+            })
+        df = pd.DataFrame(rows)
+        out = io.BytesIO()
+        with pd.ExcelWriter(out, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False, sheet_name="Users")
+            ws = writer.sheets["Users"]
+            # Auto-fit column widths
+            for col in ws.columns:
+                max_len = max((len(str(cell.value or "")) for cell in col), default=10)
+                ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 40)
+        out.seek(0)
+        fname = f"users_{title.replace(' ', '_').lower()}_{len(rows)}.xlsx"
+        bot.send_document(
+            ADMIN_ID, out, visible_file_name=fname,
+            caption=f"📊 *{title} Users* — {len(rows)} জন\n📁 ফাইলে সব ডিটেইলস আছে।",
+            parse_mode="Markdown"
+        )
     elif action == "banned":
         banned = [uid for uid, u in user_data.items() if u.get("banned")]
         if not banned: bot.send_message(ADMIN_ID, "✅ No banned users."); return
