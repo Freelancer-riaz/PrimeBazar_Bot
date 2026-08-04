@@ -1,0 +1,38 @@
+# ── Secrets — কখনো GitHub-এ push করবেন না ──────────────────────────────────
+config.py
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Virtual envs & Replit internals ──────────────────────────────────────────
+.pythonlibs/
+.venv/
+venv/
+env/
+.env
+.cache/
+.local/
+.agents/
+.replit
+replit.nix
+
+# ── Pyrogram session files (contains auth key!) ───────────────────────────────
+*.session
+*.session-journal
+
+# ── OS / editor ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
