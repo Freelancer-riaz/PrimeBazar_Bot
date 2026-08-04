@@ -11,3 +11,24 @@ localPort = 3000
 externalPort = 80
 
 [workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Test Bot (VPS)"
+
+[[workflows.workflow]]
+name = "Test Bot (VPS)"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pip install -r requirements.txt -q && python bot_vps.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
