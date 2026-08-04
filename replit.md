@@ -14,16 +14,22 @@ Settings (menus, texts, prices, toggles) are driven by JSON files
 behavior changes don't require code edits.
 
 ## Production deployment
-**The bot runs in production on Railway, not on Replit.** This repl is the
-development/editing environment only.
+**বট এখন যেকোনো VPS সার্ভারে চলে (Railway বন্ধ করা হয়েছে)।**
+Replit শুধু code editing এর জন্য ব্যবহার হয়।
+
+### VPS Deploy করার ফাইলগুলো:
+- `main.py` — মূল বট কোড
+- `mongo_db.py` — MongoDB helper
+- `config.py` — **সব secrets এখানে** (VPS-এ আপলোডের আগে values বসান)
+- `requirements.txt` — Python packages
+- `settings.json`, `texts.json`, `market_data.json`, `coupons.json` — data files
+
+বিস্তারিত: **`VPS_DEPLOY_GUIDE.md`** দেখুন।
 
 ## User preferences
-- Do not start/run the bot workflow on Replit by default — the user tests
-  changes themselves on Railway. Only make code edits here and push to
-  GitHub (`origin`); the user pulls/redeploys on Railway and reports results.
-  Running the bot here risks colliding with the live Railway instance (same
-  `BOT_TOKEN`/`USER_SESSION_STRING` — simultaneous polling causes Telegram
-  409 conflicts, and simultaneous Pyrogram userbot login can invalidate the
-  session with `AUTH_KEY_DUPLICATED`).
-- If a live Replit test run is ever needed (with explicit user consent), stop
-  the workflow again afterward instead of leaving it running.
+- Do not start/run the bot workflow on Replit by default — code edits only.
+  Running locally risks 409 conflict with the live VPS instance (same BOT_TOKEN
+  / USER_SESSION_STRING).
+- User communicates in Bengali (বাংলা).
+- Secrets are managed via `config.py` for VPS deployment (no env-var system on
+  Telegram VPS bots). Replit/Railway fallback still works via os.environ.

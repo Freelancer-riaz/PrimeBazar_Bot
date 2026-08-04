@@ -523,26 +523,44 @@ def get_otp_api():
 
 
 def keep_alive():
-    port = int(os.environ.get("PORT", 3000))
-    threading.Thread(target=lambda: flask_app.run(host="0.0.0.0", port=port), daemon=True).start()
+    try:
+        from config import PORT as _PORT
+    except ImportError:
+        _PORT = int(os.environ.get("PORT", 3000))
+    threading.Thread(target=lambda: flask_app.run(host="0.0.0.0", port=_PORT), daemon=True).start()
 
 
 # ─────────────────────────────────────────────
-#  Core Config
+#  Core Config  (config.py → fallback to env)
 # ─────────────────────────────────────────────
-API_TOKEN     = os.environ.get("BOT_TOKEN", "")
-ADMIN_ID      = int(os.environ.get("ADMIN_ID", "7522357347"))
-USER_API_ID   = os.environ.get("USER_API_ID", "")
-USER_API_HASH = os.environ.get("USER_API_HASH", "")
-USER_SESSION  = os.environ.get("USER_SESSION_STRING", "")
-# Domain: supports Replit (REPLIT_DOMAINS) and Koyeb/custom (APP_DOMAIN)
-_REPLIT_DOMAIN = (
-    os.environ.get("APP_DOMAIN") or
-    (os.environ.get("REPLIT_DOMAINS", "") or os.environ.get("REPLIT_DEV_DOMAIN", "")).split(",")[0]
-).strip()
+try:
+    from config import (
+        BOT_TOKEN         as _CFG_BOT_TOKEN,
+        ADMIN_ID          as _CFG_ADMIN_ID,
+        USER_API_ID       as _CFG_USER_API_ID,
+        USER_API_HASH     as _CFG_USER_API_HASH,
+        USER_SESSION_STRING as _CFG_USER_SESSION,
+        APP_DOMAIN        as _CFG_APP_DOMAIN,
+    )
+    API_TOKEN    = _CFG_BOT_TOKEN
+    ADMIN_ID     = _CFG_ADMIN_ID
+    USER_API_ID  = _CFG_USER_API_ID
+    USER_API_HASH = _CFG_USER_API_HASH
+    USER_SESSION  = _CFG_USER_SESSION
+    _REPLIT_DOMAIN = _CFG_APP_DOMAIN
+except ImportError:
+    API_TOKEN     = os.environ.get("BOT_TOKEN", "")
+    ADMIN_ID      = int(os.environ.get("ADMIN_ID", "7522357347"))
+    USER_API_ID   = os.environ.get("USER_API_ID", "")
+    USER_API_HASH = os.environ.get("USER_API_HASH", "")
+    USER_SESSION  = os.environ.get("USER_SESSION_STRING", "")
+    _REPLIT_DOMAIN = (
+        os.environ.get("APP_DOMAIN") or
+        (os.environ.get("REPLIT_DOMAINS", "") or os.environ.get("REPLIT_DEV_DOMAIN", "")).split(",")[0]
+    ).strip()
 
-if not API_TOKEN:
-    raise ValueError("BOT_TOKEN environment variable is not set!")
+if not API_TOKEN or API_TOKEN == "YOUR_BOT_TOKEN_HERE":
+    raise ValueError("BOT_TOKEN সেট করা নেই! config.py ফাইলে BOT_TOKEN এর জায়গায় আপনার token বসান।")
 
 bot = telebot.TeleBot(API_TOKEN, parse_mode=None)
 

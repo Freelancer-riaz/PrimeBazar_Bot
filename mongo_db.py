@@ -7,7 +7,10 @@ import os
 from pymongo import MongoClient, UpdateOne
 from pymongo.errors import PyMongoError
 
-MONGODB_URI = os.environ.get("MONGODB_URI", "") or os.environ.get("MONGO_URI", "")
+try:
+    from config import MONGODB_URI
+except ImportError:
+    MONGODB_URI = os.environ.get("MONGODB_URI", "") or os.environ.get("MONGO_URI", "")
 
 _client = None
 _db_instance = None
