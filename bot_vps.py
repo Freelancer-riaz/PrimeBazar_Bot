@@ -2261,7 +2261,7 @@ def _otp_do_fetch(chat_id: int, uid: str) -> bool:
         code = result["code"]
         em = bot.send_message(chat_id,
             f"📩 Mail : `{email}`\n"
-            f"🔑 Otp :  `{code}`\n"
+            f"🔑 Otp  : `{code}`\n"
             f"🕒  {bst}",
             parse_mode="Markdown")
         # Track as persistent history (NOT in result_msg_ids — won't be deleted)
