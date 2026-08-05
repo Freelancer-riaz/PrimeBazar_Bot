@@ -2119,6 +2119,7 @@ def _btn_labels(*keys):
 # ═══════════════════════════════════════════════════════════
 
 _otp_cred_cache: dict = {}   # uid → {email, password, refresh_token, client_id}
+_otp_state:      dict = {}   # uid → session state (message ids, history)
 
 
 def _otp_bst_time(utc_str: str) -> str:
@@ -2127,31 +2128,100 @@ def _otp_bst_time(utc_str: str) -> str:
         from datetime import timezone, timedelta as _td
         dt = datetime.strptime(utc_str[:19], "%Y-%m-%dT%H:%M:%S")
         dt = dt.replace(tzinfo=timezone.utc) + _td(hours=6)
-        return dt.strftime("%d %b %Y, %I:%M %p BST")
+        return dt.strftime("%d %b, %I:%M %p BST")
     except Exception:
         return utc_str
 
 
-def _otp_fetch_and_reply(chat_id: int, uid: str) -> bool:
+def _otp_cleanup_prev(chat_id: int, uid: str):
+    """Delete previous session messages (email card, results, loop prompt). Keep history."""
+    s = _otp_state.get(uid, {})
+    to_del = []
+    if s.get("email_card_msg_id"):
+        to_del.append(s["email_card_msg_id"])
+    to_del.extend(s.get("result_msg_ids", []))
+    if s.get("loop_msg_id"):
+        to_del.append(s["loop_msg_id"])
+    for mid in to_del:
+        try: bot.delete_message(chat_id, mid)
+        except Exception: pass
+    ns = _otp_state.setdefault(uid, {})
+    ns["email_card_msg_id"] = None
+    ns["result_msg_ids"]    = []
+    ns["loop_msg_id"]       = None
+
+
+def _otp_update_history(chat_id: int, uid: str, email: str, code: str):
+    """Add email+OTP pair to history (max 10) and update/create the history message."""
+    s       = _otp_state.setdefault(uid, {})
+    history = s.setdefault("history", [])
+    history.append((email, code))
+    if len(history) > 10:
+        history.pop(0)
+
+    lines = ["📋 *OTP Log*"]
+    for em, cd in history:
+        lines.append(f"`{em}`\n└ 🔑 `{cd}`")
+    text = "\n".join(lines)
+
+    hist_id = s.get("history_msg_id")
+    if hist_id:
+        try:
+            bot.edit_message_text(text, chat_id, hist_id, parse_mode="Markdown")
+            return
+        except Exception:
+            pass
+    msg = bot.send_message(chat_id, text, parse_mode="Markdown")
+    s["history_msg_id"] = msg.message_id
+
+
+def _otp_show_email_card(chat_id: int, uid: str):
+    """Show extracted email address with ▶️ Read OTP button."""
+    email = _otp_cred_cache.get(uid, {}).get("email", "?")
+    mk    = types.InlineKeyboardMarkup()
+    mk.add(types.InlineKeyboardButton("▶️  Read OTP", callback_data=f"otp_read|{uid}"))
+    msg = bot.send_message(
+        chat_id,
+        f"📧  `{email}`",
+        parse_mode="Markdown",
+        reply_markup=mk
+    )
+    s = _otp_state.setdefault(uid, {})
+    s["email_card_msg_id"] = msg.message_id
+    s.setdefault("result_msg_ids", [])
+
+
+def _otp_set_refresh_btn(chat_id: int, uid: str):
+    """Edit email card: replace ▶️ Read OTP with 🔄 Refresh."""
+    s   = _otp_state.get(uid, {})
+    mid = s.get("email_card_msg_id")
+    if not mid:
+        return
+    mk = types.InlineKeyboardMarkup()
+    mk.add(types.InlineKeyboardButton("🔄  Refresh", callback_data=f"otp_refresh|{uid}"))
+    try:
+        bot.edit_message_reply_markup(chat_id, mid, reply_markup=mk)
+    except Exception:
+        pass
+
+
+def _otp_do_fetch(chat_id: int, uid: str) -> bool:
     """
-    Fetch OTP using cached credentials and send result to chat_id.
-    Returns True if OTP was found, False otherwise.
+    Fetch OTP using cached credentials. Sends compact one/two-line messages.
+    Returns True if OTP found.
     """
     creds = _otp_cred_cache.get(uid)
     if not creds:
         bot.send_message(chat_id,
-            "❌ Credentials পাওয়া গেলো না। /get\\_code দিয়ে আবার শুরু করুন।",
+            "❌ Session expired · /get\\_code দিয়ে আবার শুরু করুন",
             parse_mode="Markdown")
         return False
 
-    # "Checking…" spinner
-    spin = bot.send_message(
-        chat_id,
-        "✨━━━━━━━━━━━━━━✨\n"
-        "⏳ *Inbox চেক করা হচ্ছে...*\n"
-        "✨━━━━━━━━━━━━━━✨",
-        parse_mode="Markdown"
-    )
+    email = creds.get("email", "?")
+    s     = _otp_state.setdefault(uid, {})
+
+    # Compact spinner (1 line)
+    spin = bot.send_message(chat_id, f"⏳  `{email}` · Checking inbox...", parse_mode="Markdown")
 
     try:
         access_token = get_access_token(creds["client_id"], creds["refresh_token"])
@@ -2159,141 +2229,108 @@ def _otp_fetch_and_reply(chat_id: int, uid: str) -> bool:
     except requests.exceptions.HTTPError as e:
         try: bot.delete_message(chat_id, spin.message_id)
         except Exception: pass
-        status = e.response.status_code if e.response else 0
-        if status in (400, 401):
-            err_msg = "❌ *Token Expired / Invalid*\nRefresh token মেয়াদোত্তীর্ণ বা Client ID ভুল। নতুন credentials দিন।"
-        else:
-            err_msg = f"❌ *HTTP Error {status}:* `{str(e)[:150]}`"
-        mk = types.InlineKeyboardMarkup()
-        mk.add(types.InlineKeyboardButton("🔄 Retry", callback_data=f"otp_refresh|{uid}"))
-        bot.send_message(chat_id,
-            f"✨━━━━━━━━━━━━━━✨\n{err_msg}\n✨━━━━━━━━━━━━━━✨",
-            parse_mode="Markdown", reply_markup=mk)
+        status  = e.response.status_code if e.response else 0
+        err_lbl = "Token Invalid" if status in (400, 401) else f"HTTP {status}"
+        _otp_set_refresh_btn(chat_id, uid)
+        em = bot.send_message(chat_id,
+            f"❌  *{err_lbl}* · `{email}`\n_নতুন credentials দিন বা Refresh করুন_",
+            parse_mode="Markdown")
+        s.setdefault("result_msg_ids", []).append(em.message_id)
         return False
     except requests.exceptions.Timeout:
         try: bot.delete_message(chat_id, spin.message_id)
         except Exception: pass
-        mk = types.InlineKeyboardMarkup()
-        mk.add(types.InlineKeyboardButton("🔄 Retry", callback_data=f"otp_refresh|{uid}"))
-        bot.send_message(chat_id,
-            "✨━━━━━━━━━━━━━━✨\n"
-            "❌ *Network Timeout*\nInternet সমস্যা। একটু পরে Retry করুন।\n"
-            "✨━━━━━━━━━━━━━━✨",
-            parse_mode="Markdown", reply_markup=mk)
+        _otp_set_refresh_btn(chat_id, uid)
+        em = bot.send_message(chat_id,
+            f"⏱️  *Timeout* · `{email}` — Refresh করুন",
+            parse_mode="Markdown")
+        s.setdefault("result_msg_ids", []).append(em.message_id)
         return False
-    except Exception as e:
+    except Exception as exc:
         try: bot.delete_message(chat_id, spin.message_id)
         except Exception: pass
-        mk = types.InlineKeyboardMarkup()
-        mk.add(types.InlineKeyboardButton("🔄 Retry", callback_data=f"otp_refresh|{uid}"))
-        bot.send_message(chat_id,
-            f"✨━━━━━━━━━━━━━━✨\n"
-            f"❌ *Error:* `{str(e)[:200]}`\n"
-            f"✨━━━━━━━━━━━━━━✨",
-            parse_mode="Markdown", reply_markup=mk)
+        _otp_set_refresh_btn(chat_id, uid)
+        em = bot.send_message(chat_id,
+            f"❌  `{str(exc)[:120]}`",
+            parse_mode="Markdown")
+        s.setdefault("result_msg_ids", []).append(em.message_id)
         return False
 
     try: bot.delete_message(chat_id, spin.message_id)
     except Exception: pass
 
     if "error" in result:
-        # OTP not found — show error + Refresh button
-        mk = types.InlineKeyboardMarkup()
-        mk.add(types.InlineKeyboardButton("🔄 Refresh", callback_data=f"otp_refresh|{uid}"))
-        bot.send_message(chat_id,
-            f"✨━━━━━━━━━━━━━━✨\n"
-            f"📭 *কোনো OTP পাওয়া যায়নি*\n"
-            f"✨━━━━━━━━━━━━━━✨\n"
-            f"📧 *Email:* `{creds['email']}`\n\n"
-            f"⚠️ _{result['error']}_\n\n"
-            f"🔄 *Refresh* বাটনে ক্লিক করুন অথবা নতুন credentials পাঠান।",
-            parse_mode="Markdown", reply_markup=mk)
+        # No OTP — change button to Refresh, show compact notice
+        _otp_set_refresh_btn(chat_id, uid)
+        em = bot.send_message(chat_id,
+            f"📭  *No OTP* · `{email}`\n_{result['error']}_",
+            parse_mode="Markdown")
+        s.setdefault("result_msg_ids", []).append(em.message_id)
         return False
     else:
-        # ✅ OTP found — premium result UI
-        bst = _otp_bst_time(result.get("received", ""))
-        bot.send_message(chat_id,
-            f"✨━━━━━━━━━━━━━━✨\n"
-            f"🔐 *OTP Code পাওয়া গেছে!*\n"
-            f"✨━━━━━━━━━━━━━━✨\n"
-            f"📧 *Email:* `{creds['email']}`\n"
-            f"📩 *Subject:* {result.get('subject', '—')}\n"
-            f"👤 *From:* `{result.get('sender', '—')}`\n"
-            f"🕒 *Received:* {bst}\n"
-            f"✨━━━━━━━━━━━━━━✨\n\n"
-            f"🔑 *আপনার OTP Code:*\n\n"
-            f"`{result['code']}`\n\n"
-            f"✨━━━━━━━━━━━━━━✨\n"
-            f"_📋 Code-এ ট্যাপ করলে কপি হবে_",
+        # ✅ OTP found — compact 2-line success
+        bst  = _otp_bst_time(result.get("received", ""))
+        code = result["code"]
+        subj = result.get("subject", "—")
+        em = bot.send_message(chat_id,
+            f"✅  🔑  `{code}`  ·  `{email}`\n📩  {subj}  ·  🕒  {bst}",
             parse_mode="Markdown")
-        # Clear cache — next credentials will be fresh
+        s.setdefault("result_msg_ids", []).append(em.message_id)
         _otp_cred_cache.pop(uid, None)
+        _otp_update_history(chat_id, uid, email, code)
         return True
 
 
-def _otp_send_loop_prompt(chat_id: int):
-    """Send 'paste next credentials' prompt (loop mode)."""
-    bot.send_message(
+def _otp_send_loop_prompt(chat_id: int, uid: str):
+    """Show compact 'send next credentials' prompt."""
+    msg = bot.send_message(
         chat_id,
-        "✨━━━━━━━━━━━━━━✨\n"
-        "☎️ *Loop Mode — পরবর্তী Email*\n"
-        "✨━━━━━━━━━━━━━━✨\n"
-        "📋 পরবর্তী credentials পাঠান:\n\n"
-        "`email|password|refresh_token|client_id`\n\n"
-        "🔴 বন্ধ করতে /start বা /menu পাঠান।",
+        "📋  পরবর্তী:  `email|password|refresh_token|client_id`",
         parse_mode="Markdown"
     )
+    _otp_state.setdefault(uid, {})["loop_msg_id"] = msg.message_id
 
 
 @bot.message_handler(commands=["get_code"])
 def cmd_get_code(message):
     uid = str(message.chat.id)
-    _otp_cred_cache.pop(uid, None)   # clear any stale cache
+    _otp_cred_cache.pop(uid, None)
     bot.send_message(
         message.chat.id,
-        "✨━━━━━━━━━━━━━━✨\n"
-        "☎️ *Hotmail / Outlook OTP Reader*\n"
-        "✨━━━━━━━━━━━━━━✨\n"
-        "📋 নিচের format-এ credentials পাঠান:\n\n"
-        "`email|password|refresh_token|client_id`\n\n"
-        "📌 *উদাহরণ:*\n"
-        "`user@outlook.com|Pass123|0.AXoA...|abc-def`\n\n"
-        "🔴 বন্ধ করতে /start বা /menu পাঠান।",
+        "☎️  *Hotmail / Outlook OTP Reader*\n"
+        "`email|password|refresh_token|client_id`",
         parse_mode="Markdown"
     )
     bot.register_next_step_handler(message, _otp_handle_creds)
 
 
 def _otp_handle_creds(message):
-    """Process credentials pasted by the user, fetch OTP, then loop."""
+    """Process credentials pasted by the user."""
     uid = str(message.chat.id)
     txt = (message.text or "").strip()
 
-    # Exit loop on commands
     if txt.startswith("/start") or txt.startswith("/menu"):
         welcome(message)
         return
 
-    # Validate format
     parts = txt.split("|")
     if len(parts) < 4:
         bot.send_message(
             message.chat.id,
-            "✨━━━━━━━━━━━━━━✨\n"
-            "⚠️ *ভুল Format!*\n"
-            "✨━━━━━━━━━━━━━━✨\n"
-            "📋 সঠিক format:\n"
-            "`email|password|refresh_token|client_id`\n\n"
+            "⚠️  *ভুল Format!*  `email|password|refresh_token|client_id`\n"
             "_আবার পাঠান অথবা /start দিয়ে মেনুতে যান।_",
             parse_mode="Markdown"
         )
         bot.register_next_step_handler(message, _otp_handle_creds)
         return
 
-    email_val   = parts[0].strip()
-    password    = parts[1].strip()
-    ref_token   = parts[2].strip()
-    client_id   = "|".join(p.strip() for p in parts[3:])  # client_id may contain |
+    email_val = parts[0].strip()
+    password  = parts[1].strip()
+    ref_token = parts[2].strip()
+    client_id = "|".join(p.strip() for p in parts[3:])
+
+    # Delete previous session messages (keep history)
+    _otp_cleanup_prev(message.chat.id, uid)
 
     _otp_cred_cache[uid] = {
         "email":         email_val,
@@ -2302,26 +2339,30 @@ def _otp_handle_creds(message):
         "client_id":     client_id,
     }
 
-    found = _otp_fetch_and_reply(message.chat.id, uid)
+    # Show email + ▶️ Read OTP button (don't fetch yet)
+    _otp_show_email_card(message.chat.id, uid)
+    # next_step_handler registered after button click
 
-    # Always loop: show prompt and wait for next credentials
-    _otp_send_loop_prompt(message.chat.id)
-    bot.register_next_step_handler(message, _otp_handle_creds)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("otp_read|"))
+def otp_read_btn_cb(call):
+    """▶️ Read OTP button clicked."""
+    uid = call.data.split("|", 1)[1]
+    bot.answer_callback_query(call.id, "⏳ Checking inbox...")
+    found = _otp_do_fetch(call.message.chat.id, uid)
+    if found:
+        _otp_send_loop_prompt(call.message.chat.id, uid)
+    bot.register_next_step_handler(call.message, _otp_handle_creds)
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("otp_refresh|"))
 def otp_refresh_cb(call):
-    """🔄 Refresh button — re-check same credentials."""
+    """🔄 Refresh button clicked."""
     uid = call.data.split("|", 1)[1]
-    bot.answer_callback_query(call.id, "🔄 Re-checking inbox...")
-    # Delete the old error card
-    try: bot.delete_message(call.message.chat.id, call.message.message_id)
-    except Exception: pass
-
-    _otp_fetch_and_reply(call.message.chat.id, uid)
-
-    # Re-enter loop
-    _otp_send_loop_prompt(call.message.chat.id)
+    bot.answer_callback_query(call.id, "🔄 Refreshing...")
+    found = _otp_do_fetch(call.message.chat.id, uid)
+    if found:
+        _otp_send_loop_prompt(call.message.chat.id, uid)
     bot.register_next_step_handler(call.message, _otp_handle_creds)
 
 
