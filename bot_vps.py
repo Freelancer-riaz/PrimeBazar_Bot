@@ -2134,7 +2134,8 @@ def _otp_bst_time(utc_str: str) -> str:
 
 
 def _otp_cleanup_prev(chat_id: int, uid: str):
-    """Delete previous session messages (email card, results, loop prompt). Keep history."""
+    """Delete previous session messages (email card, results, loop prompt).
+    otp_success_msg_ids are kept — they are the persistent history."""
     s = _otp_state.get(uid, {})
     to_del = []
     if s.get("email_card_msg_id"):
@@ -2151,28 +2152,15 @@ def _otp_cleanup_prev(chat_id: int, uid: str):
     ns["loop_msg_id"]       = None
 
 
-def _otp_update_history(chat_id: int, uid: str, email: str, code: str):
-    """Add email+OTP pair to history (max 10) and update/create the history message."""
-    s       = _otp_state.setdefault(uid, {})
-    history = s.setdefault("history", [])
-    history.append((email, code))
-    if len(history) > 10:
-        history.pop(0)
-
-    lines = ["📋 *OTP Log*"]
-    for em, cd in history:
-        lines.append(f"`{em}`\n└ 🔑 `{cd}`")
-    text = "\n".join(lines)
-
-    hist_id = s.get("history_msg_id")
-    if hist_id:
-        try:
-            bot.edit_message_text(text, chat_id, hist_id, parse_mode="Markdown")
-            return
-        except Exception:
-            pass
-    msg = bot.send_message(chat_id, text, parse_mode="Markdown")
-    s["history_msg_id"] = msg.message_id
+def _otp_track_success(chat_id: int, uid: str, msg_id: int):
+    """Keep last 10 OTP success message IDs. Delete oldest when limit exceeded."""
+    s    = _otp_state.setdefault(uid, {})
+    ids  = s.setdefault("otp_success_msg_ids", [])
+    ids.append(msg_id)
+    if len(ids) > 10:
+        oldest = ids.pop(0)
+        try: bot.delete_message(chat_id, oldest)
+        except Exception: pass
 
 
 def _otp_show_email_card(chat_id: int, uid: str):
@@ -2268,16 +2256,17 @@ def _otp_do_fetch(chat_id: int, uid: str) -> bool:
         s.setdefault("result_msg_ids", []).append(em.message_id)
         return False
     else:
-        # ✅ OTP found — compact 2-line success
+        # ✅ OTP found — 3-line success (email & OTP each copyable with one tap)
         bst  = _otp_bst_time(result.get("received", ""))
         code = result["code"]
-        subj = result.get("subject", "—")
         em = bot.send_message(chat_id,
-            f"`{email}`  →  🔑  `{code}`\n📩  {subj}  ·  🕒  {bst}",
+            f"📩 Mail : `{email}`\n"
+            f"🔑 Otp :  `{code}`\n"
+            f"🕒  {bst}",
             parse_mode="Markdown")
-        s.setdefault("result_msg_ids", []).append(em.message_id)
+        # Track as persistent history (NOT in result_msg_ids — won't be deleted)
+        _otp_track_success(chat_id, uid, em.message_id)
         _otp_cred_cache.pop(uid, None)
-        _otp_update_history(chat_id, uid, email, code)
         return True
 
 
