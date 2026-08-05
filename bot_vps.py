@@ -2273,7 +2273,7 @@ def _otp_do_fetch(chat_id: int, uid: str) -> bool:
         code = result["code"]
         subj = result.get("subject", "—")
         em = bot.send_message(chat_id,
-            f"✅  🔑  `{code}`  ·  `{email}`\n📩  {subj}  ·  🕒  {bst}",
+            f"`{email}`  →  🔑  `{code}`\n📩  {subj}  ·  🕒  {bst}",
             parse_mode="Markdown")
         s.setdefault("result_msg_ids", []).append(em.message_id)
         _otp_cred_cache.pop(uid, None)
