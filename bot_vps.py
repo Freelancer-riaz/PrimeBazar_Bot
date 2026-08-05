@@ -1004,7 +1004,13 @@ except ImportError:
     ).strip()
 
 if not API_TOKEN or API_TOKEN == "YOUR_BOT_TOKEN_HERE":
-    raise ValueError("BOT_TOKEN সেট করা নেই! config.py ফাইলে BOT_TOKEN এর জায়গায় আপনার token বসান।")
+    raise ValueError(
+        "❌ BOT_TOKEN সেট করা নেই!\n"
+        "👉 bot_vps.py ফাইলের উপরের CONFIG SECTION-এ\n"
+        "   BOT_TOKEN = os.environ.get('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')\n"
+        "   এই লাইনে 'YOUR_BOT_TOKEN_HERE' এর জায়গায় আপনার real token বসান।\n"
+        "   ⚠️  main.py নয়, bot_vps.py ব্যবহার করুন!"
+    )
 
 bot = telebot.TeleBot(API_TOKEN, parse_mode=None)
 
