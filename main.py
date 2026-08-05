@@ -919,29 +919,31 @@ def _unique_product_key(name: str) -> str:
     return f"{name} #{i}"
 
 def _is_manual_delivery_vpn(p_info: dict, fallback_key: str = "") -> bool:
-    """True when this VPN purchase must be delivered manually by the admin —
-    either because the global userbot switch is off, or this specific VPN
-    name is always on the manual-delivery list.
-    Matching checks all combinations:
-      • exact product name           (e.g. "14 Days Proton")
-      • duration + name              (e.g. "30 days" + "nord"  → "30 days nord")
-      • name + duration              (e.g. "nord" + "30 days"  → "nord 30 days")
-    Duration is stripped of leading emojis/symbols before matching so that
-    values like "🚀 30 Days" still match the list entry "30 Days Express".
+    """True when this VPN purchase must be delivered manually by the admin.
+
+    Priority order:
+      1. Per-product toggle  (p_info["manual_delivery"] = True/False)   ← highest
+      2. Global userbot switch  (settings["userbot_enabled"] = False)
+      3. Global manual list     (settings["manual_delivery_vpns"])
     """
     import re as _re
+    # 1. Per-product toggle — explicit True/False overrides everything
+    per_prod = p_info.get("manual_delivery")
+    if per_prod is not None:
+        return bool(per_prod)
+    # 2. Global userbot switch
     if cfg("userbot_enabled") is False:
         return True
+    # 3. Global name-based manual list
     manual_names = {n.strip().lower() for n in (cfg("manual_delivery_vpns") or [])}
     name     = (p_info.get("name") or fallback_key or "").strip().lower()
     raw_dur  = (p_info.get("duration") or "").strip().lower()
-    # Strip leading emoji / symbol characters (keep letters, digits, spaces)
     duration = _re.sub(r'^[^\w\s]+\s*', '', raw_dur).strip()
     return (
         name in manual_names
         or f"{duration} {name}" in manual_names
         or f"{name} {duration}" in manual_names
-        or raw_dur and f"{raw_dur} {name}" in manual_names
+        or bool(raw_dur and f"{raw_dur} {name}" in manual_names)
     )
 
 def _load_stock_rows(p_name):
@@ -2913,10 +2915,14 @@ def _deliver_vpn(uid, call, p_name, qty, total, success_msg, S):
         delivery += (
             f"🛡️ *VPN Account #{i}*\n"
             f"✨━━━━━━━━━━━━✨\n"
-            f"📧 Mail: `{mail}`\n"
-            f"🔑 Pass: `{pw}`\n"
+            f"📧 *Email:*\n`{mail}`\n\n"
+            f"🔑 *Password:*\n`{pw}`\n"
             f"✨━━━━━━━━━━━━✨\n\n"
         )
+    delivery += (
+        f"👆 _Email বা Password-এ ট্যাপ করলে আলাদাভাবে কপি হবে_\n"
+        f"🎉 *ধন্যবাদ! Prime Bazar ব্যবহার করার জন্য।* 🛒"
+    )
     bot.send_message(uid, delivery.strip(), parse_mode="Markdown")
     # Check supplier balance after every VPN purchase (non-blocking)
     threading.Thread(target=_check_and_alert_balance_once, daemon=True).start()
@@ -5494,6 +5500,7 @@ def prod_edit_menu(call):
     p_name = call.data.split("|", 1)[1]; prods = get_products()
     if p_name not in prods: bot.answer_callback_query(call.id, "❌ Product not found."); return
     p = prods[p_name]; stock = get_stock_count(p_name)
+    is_vpn = p.get("cat") == "vpn"
     mk = types.InlineKeyboardMarkup(row_width=2)
     mk.add(
         types.InlineKeyboardButton("📝 Edit Name",      callback_data=f"prod_ename|{p_name}"),
@@ -5503,14 +5510,63 @@ def prod_edit_menu(call):
         types.InlineKeyboardButton("⏳ Edit Duration",  callback_data=f"prod_edur|{p_name}"),
         types.InlineKeyboardButton("🗑️ Delete",         callback_data=f"prod_del|{p_name}"),
     )
+    # VPN-only: per-product Manual/Auto delivery toggle
+    if is_vpn:
+        per_toggle = p.get("manual_delivery")   # None = global rule, True = manual, False = auto
+        if per_toggle is True:
+            tog_label = "🔴 Delivery: Manual (tap to → Auto)"
+        elif per_toggle is False:
+            tog_label = "🟢 Delivery: Auto (tap to → Manual)"
+        else:
+            # inherits global setting — show current effective value
+            effective = _is_manual_delivery_vpn(p, p_name)
+            tog_label = f"{'🔴 Manual' if effective else '🟢 Auto'} (Global — tap to set)"
+        mk.add(types.InlineKeyboardButton(tog_label, callback_data=f"prod_tog_manual|{p_name}"))
     mk.add(types.InlineKeyboardButton("🔙 Back", callback_data=f"prod_cat|{p['cat']}"))
+    # Build info text
+    if is_vpn:
+        per_toggle = p.get("manual_delivery")
+        if per_toggle is True:   delivery_txt = "🔴 Manual (per-product)"
+        elif per_toggle is False: delivery_txt = "🟢 Auto/Userbot (per-product)"
+        else:                    delivery_txt = "🌐 Inherits global rule"
+    else:
+        delivery_txt = "N/A"
     txt = (
         f"🛍️ *{p_name}*\n✨━━━━━━━━━━━━✨\n"
-        f"💰 Price: *{p['price']} BDT*\n⏳ Duration: *{p.get('duration','N/A')}*\n"
-        f"📦 Stock: *{stock} pcs*\n📁 File: `{p['file']}`\n✨━━━━━━━━━━━━✨"
+        f"💰 Price: *{p['price']} BDT*\n"
+        f"⏳ Duration: *{p.get('duration','N/A')}*\n"
+        f"📦 Stock: *{stock} pcs*\n"
+        + (f"🚚 Delivery: {delivery_txt}\n" if is_vpn else "")
+        + f"✨━━━━━━━━━━━━✨"
     )
     bot.edit_message_text(txt, ADMIN_ID, call.message.message_id, reply_markup=mk, parse_mode="Markdown")
     bot.answer_callback_query(call.id)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("prod_tog_manual|"))
+def prod_toggle_manual_delivery(call):
+    """Toggle per-product manual delivery: None → True → False → None (cycle)."""
+    if call.message.chat.id != ADMIN_ID: return
+    p_name = call.data.split("|", 1)[1]
+    prods  = get_products()
+    if p_name not in prods:
+        bot.answer_callback_query(call.id, "❌ Product not found."); return
+    current = prods[p_name].get("manual_delivery")  # None / True / False
+    # Cycle: None → True (Manual) → False (Auto) → None (Global)
+    if current is None:
+        new_val = True;  label = "🔴 Manual Delivery ON"
+    elif current is True:
+        new_val = False; label = "🟢 Auto Delivery ON"
+    else:
+        new_val = None;  label = "🌐 Reverted to Global Rule"
+    if new_val is None:
+        market_data["products"][p_name].pop("manual_delivery", None)
+    else:
+        market_data["products"][p_name]["manual_delivery"] = new_val
+    save_market_data(market_data)
+    bot.answer_callback_query(call.id, f"✅ {label}")
+    # Refresh the product edit menu
+    prod_edit_menu(call)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("prod_eprice|"))
 def prod_edit_price_start(call):
