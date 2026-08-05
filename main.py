@@ -6139,6 +6139,91 @@ def backup_db(message):
     _do_backup()
 
 
+# ─────────────────────────────────────────────
+#  /generate_vps — Ready-to-upload VPS file
+# ─────────────────────────────────────────────
+@bot.message_handler(commands=["generate_vps"])
+def cmd_generate_vps(message):
+    """Generate a bot_vps.py with all secrets already filled in and send to admin."""
+    if not admin_only(message): return
+
+    bot.send_message(ADMIN_ID,
+        "⏳ *VPS ফাইল তৈরি হচ্ছে...*",
+        parse_mode="Markdown")
+    try:
+        # Read the template bot_vps.py from disk
+        import os as _os
+        vps_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "bot_vps.py")
+        with open(vps_path, "r", encoding="utf-8") as _f:
+            content = _f.read()
+
+        # Collect real secrets from environment
+        _bt  = _os.environ.get("BOT_TOKEN",           "") or API_TOKEN
+        _aid = _os.environ.get("ADMIN_ID",            str(ADMIN_ID))
+        _uid = _os.environ.get("USER_API_ID",         "") or str(USER_API_ID or "")
+        _uhash = _os.environ.get("USER_API_HASH",     "") or str(USER_API_HASH or "")
+        _sess  = _os.environ.get("USER_SESSION_STRING", "") or str(USER_SESSION or "")
+        _mongo = _os.environ.get("MONGODB_URI",       "") or _os.environ.get("MONGO_URI", "") or MONGODB_URI
+
+        # Replace placeholders in CONFIG section
+        replacements = [
+            ('os.environ.get("BOT_TOKEN",           "YOUR_BOT_TOKEN_HERE")',
+             f'os.environ.get("BOT_TOKEN",           "{_bt}")'),
+            ('int(os.environ.get("ADMIN_ID",        "7522357347"))',
+             f'int(os.environ.get("ADMIN_ID",        "{_aid}"))'),
+            ('os.environ.get("USER_API_ID",         "YOUR_API_ID_HERE")',
+             f'os.environ.get("USER_API_ID",         "{_uid}")'),
+            ('os.environ.get("USER_API_HASH",       "YOUR_API_HASH_HERE")',
+             f'os.environ.get("USER_API_HASH",       "{_uhash}")'),
+            ('os.environ.get("USER_SESSION_STRING", "YOUR_SESSION_STRING_HERE")',
+             f'os.environ.get("USER_SESSION_STRING", "{_sess}")'),
+            ('"YOUR_MONGODB_URI_HERE"',
+             f'"{_mongo}"'),
+        ]
+        for old, new in replacements:
+            content = content.replace(old, new, 1)
+
+        # Verify placeholders are gone
+        remaining = [k for k in ["YOUR_BOT_TOKEN_HERE", "YOUR_API_ID_HERE",
+                                  "YOUR_API_HASH_HERE", "YOUR_SESSION_STRING_HERE",
+                                  "YOUR_MONGODB_URI_HERE"] if k in content]
+        if remaining:
+            bot.send_message(ADMIN_ID,
+                f"⚠️ কিছু values খুঁজে পাওয়া যায়নি:\n`{remaining}`\n"
+                f"Replit Secrets ঠিকমতো set আছে কি?",
+                parse_mode="Markdown")
+            return
+
+        # Send as file named main.py (ready to upload directly to PyHost)
+        import io as _io
+        file_bytes = _io.BytesIO(content.encode("utf-8"))
+        file_bytes.name = "main.py"
+        bot.send_document(
+            ADMIN_ID,
+            file_bytes,
+            caption=(
+                "✅ *VPS ফাইল তৈরি হয়েছে!*\n"
+                "✨━━━━━━━━━━━━━━━━━━✨\n"
+                "📋 *এই ফাইলে সব secrets ভরা আছে।*\n\n"
+                "📤 *PyHost-এ Upload করুন:*\n"
+                "1️⃣ এই `main.py` ফাইলটি download করুন\n"
+                "2️⃣ PyHost Cloud → Upload File → এই ফাইল দিন\n"
+                "3️⃣ Deploy & Launch চাপুন\n\n"
+                "⚠️ *ফাইলটি কারো সাথে share করবেন না — এতে সব secrets আছে!*\n"
+                "✨━━━━━━━━━━━━━━━━━━✨"
+            ),
+            parse_mode="Markdown"
+        )
+    except FileNotFoundError:
+        bot.send_message(ADMIN_ID,
+            "❌ `bot_vps.py` ফাইল খুঁজে পাওয়া যায়নি। Replit-এ ফাইলটি আছে কি?",
+            parse_mode="Markdown")
+    except Exception as _e:
+        bot.send_message(ADMIN_ID,
+            f"❌ Error: `{str(_e)[:300]}`",
+            parse_mode="Markdown")
+
+
 # ═══════════════════════════════════════════════
 #  MAIN ENTRY POINT
 # ═══════════════════════════════════════════════
@@ -6181,8 +6266,9 @@ if __name__ == "__main__":
         types.BotCommand("broadcast",   "📢 Broadcast to all users"),
         types.BotCommand("addstock",    "📦 Upload stock file"),
         types.BotCommand("mailstock",   "📧 View mail stock (Fresh/Used)"),
-        types.BotCommand("backup",      "💾 Backup database"),
-        types.BotCommand("restore",     "📥 Restore database"),
+        types.BotCommand("backup",        "💾 Backup database"),
+        types.BotCommand("restore",       "📥 Restore database"),
+        types.BotCommand("generate_vps",  "📦 VPS ফাইল generate করুন"),
     ]
     bot.set_my_commands(admin_commands, scope=types.BotCommandScopeChat(chat_id=ADMIN_ID))
     try:
