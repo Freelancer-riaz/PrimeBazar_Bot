@@ -1794,6 +1794,219 @@ def _btn_labels(*keys):
 # ═══════════════════════════════════════════════
 #  /start  /menu
 # ═══════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
+#  /get_code — Hotmail/Outlook OTP Reader (Loop Mode)
+# ═══════════════════════════════════════════════════════════
+
+_otp_cred_cache: dict = {}   # uid → {email, password, refresh_token, client_id}
+
+
+def _otp_bst_time(utc_str: str) -> str:
+    """ISO UTC string → Bangladesh Standard Time (UTC+6)."""
+    try:
+        from datetime import timezone, timedelta as _td
+        dt = datetime.strptime(utc_str[:19], "%Y-%m-%dT%H:%M:%S")
+        dt = dt.replace(tzinfo=timezone.utc) + _td(hours=6)
+        return dt.strftime("%d %b %Y, %I:%M %p BST")
+    except Exception:
+        return utc_str
+
+
+def _otp_fetch_and_reply(chat_id: int, uid: str) -> bool:
+    """
+    Fetch OTP using cached credentials and send result to chat_id.
+    Returns True if OTP was found, False otherwise.
+    """
+    creds = _otp_cred_cache.get(uid)
+    if not creds:
+        bot.send_message(chat_id,
+            "❌ Credentials পাওয়া গেলো না। /get\\_code দিয়ে আবার শুরু করুন।",
+            parse_mode="Markdown")
+        return False
+
+    # "Checking…" spinner
+    spin = bot.send_message(
+        chat_id,
+        "✨━━━━━━━━━━━━━━✨\n"
+        "⏳ *Inbox চেক করা হচ্ছে...*\n"
+        "✨━━━━━━━━━━━━━━✨",
+        parse_mode="Markdown"
+    )
+
+    try:
+        access_token = get_access_token(creds["client_id"], creds["refresh_token"])
+        result       = fetch_email_code(access_token)
+    except requests.exceptions.HTTPError as e:
+        try: bot.delete_message(chat_id, spin.message_id)
+        except Exception: pass
+        status = e.response.status_code if e.response else 0
+        if status in (400, 401):
+            err_msg = "❌ *Token Expired / Invalid*\nRefresh token মেয়াদোত্তীর্ণ বা Client ID ভুল। নতুন credentials দিন।"
+        else:
+            err_msg = f"❌ *HTTP Error {status}:* `{str(e)[:150]}`"
+        mk = types.InlineKeyboardMarkup()
+        mk.add(types.InlineKeyboardButton("🔄 Retry", callback_data=f"otp_refresh|{uid}"))
+        bot.send_message(chat_id,
+            f"✨━━━━━━━━━━━━━━✨\n{err_msg}\n✨━━━━━━━━━━━━━━✨",
+            parse_mode="Markdown", reply_markup=mk)
+        return False
+    except requests.exceptions.Timeout:
+        try: bot.delete_message(chat_id, spin.message_id)
+        except Exception: pass
+        mk = types.InlineKeyboardMarkup()
+        mk.add(types.InlineKeyboardButton("🔄 Retry", callback_data=f"otp_refresh|{uid}"))
+        bot.send_message(chat_id,
+            "✨━━━━━━━━━━━━━━✨\n"
+            "❌ *Network Timeout*\nInternet সমস্যা। একটু পরে Retry করুন।\n"
+            "✨━━━━━━━━━━━━━━✨",
+            parse_mode="Markdown", reply_markup=mk)
+        return False
+    except Exception as e:
+        try: bot.delete_message(chat_id, spin.message_id)
+        except Exception: pass
+        mk = types.InlineKeyboardMarkup()
+        mk.add(types.InlineKeyboardButton("🔄 Retry", callback_data=f"otp_refresh|{uid}"))
+        bot.send_message(chat_id,
+            f"✨━━━━━━━━━━━━━━✨\n"
+            f"❌ *Error:* `{str(e)[:200]}`\n"
+            f"✨━━━━━━━━━━━━━━✨",
+            parse_mode="Markdown", reply_markup=mk)
+        return False
+
+    try: bot.delete_message(chat_id, spin.message_id)
+    except Exception: pass
+
+    if "error" in result:
+        # OTP not found — show error + Refresh button
+        mk = types.InlineKeyboardMarkup()
+        mk.add(types.InlineKeyboardButton("🔄 Refresh", callback_data=f"otp_refresh|{uid}"))
+        bot.send_message(chat_id,
+            f"✨━━━━━━━━━━━━━━✨\n"
+            f"📭 *কোনো OTP পাওয়া যায়নি*\n"
+            f"✨━━━━━━━━━━━━━━✨\n"
+            f"📧 *Email:* `{creds['email']}`\n\n"
+            f"⚠️ _{result['error']}_\n\n"
+            f"🔄 *Refresh* বাটনে ক্লিক করুন অথবা নতুন credentials পাঠান।",
+            parse_mode="Markdown", reply_markup=mk)
+        return False
+    else:
+        # ✅ OTP found — premium result UI
+        bst = _otp_bst_time(result.get("received", ""))
+        bot.send_message(chat_id,
+            f"✨━━━━━━━━━━━━━━✨\n"
+            f"🔐 *OTP Code পাওয়া গেছে!*\n"
+            f"✨━━━━━━━━━━━━━━✨\n"
+            f"📧 *Email:* `{creds['email']}`\n"
+            f"📩 *Subject:* {result.get('subject', '—')}\n"
+            f"👤 *From:* `{result.get('sender', '—')}`\n"
+            f"🕒 *Received:* {bst}\n"
+            f"✨━━━━━━━━━━━━━━✨\n\n"
+            f"🔑 *আপনার OTP Code:*\n\n"
+            f"`{result['code']}`\n\n"
+            f"✨━━━━━━━━━━━━━━✨\n"
+            f"_📋 Code-এ ট্যাপ করলে কপি হবে_",
+            parse_mode="Markdown")
+        # Clear cache — next credentials will be fresh
+        _otp_cred_cache.pop(uid, None)
+        return True
+
+
+def _otp_send_loop_prompt(chat_id: int):
+    """Send 'paste next credentials' prompt (loop mode)."""
+    bot.send_message(
+        chat_id,
+        "✨━━━━━━━━━━━━━━✨\n"
+        "☎️ *Loop Mode — পরবর্তী Email*\n"
+        "✨━━━━━━━━━━━━━━✨\n"
+        "📋 পরবর্তী credentials পাঠান:\n\n"
+        "`email|password|refresh_token|client_id`\n\n"
+        "🔴 বন্ধ করতে /start বা /menu পাঠান।",
+        parse_mode="Markdown"
+    )
+
+
+@bot.message_handler(commands=["get_code"])
+def cmd_get_code(message):
+    uid = str(message.chat.id)
+    _otp_cred_cache.pop(uid, None)   # clear any stale cache
+    bot.send_message(
+        message.chat.id,
+        "✨━━━━━━━━━━━━━━✨\n"
+        "☎️ *Hotmail / Outlook OTP Reader*\n"
+        "✨━━━━━━━━━━━━━━✨\n"
+        "📋 নিচের format-এ credentials পাঠান:\n\n"
+        "`email|password|refresh_token|client_id`\n\n"
+        "📌 *উদাহরণ:*\n"
+        "`user@outlook.com|Pass123|0.AXoA...|abc-def`\n\n"
+        "🔴 বন্ধ করতে /start বা /menu পাঠান।",
+        parse_mode="Markdown"
+    )
+    bot.register_next_step_handler(message, _otp_handle_creds)
+
+
+def _otp_handle_creds(message):
+    """Process credentials pasted by the user, fetch OTP, then loop."""
+    uid = str(message.chat.id)
+    txt = (message.text or "").strip()
+
+    # Exit loop on commands
+    if txt.startswith("/start") or txt.startswith("/menu"):
+        welcome(message)
+        return
+
+    # Validate format
+    parts = txt.split("|")
+    if len(parts) < 4:
+        bot.send_message(
+            message.chat.id,
+            "✨━━━━━━━━━━━━━━✨\n"
+            "⚠️ *ভুল Format!*\n"
+            "✨━━━━━━━━━━━━━━✨\n"
+            "📋 সঠিক format:\n"
+            "`email|password|refresh_token|client_id`\n\n"
+            "_আবার পাঠান অথবা /start দিয়ে মেনুতে যান।_",
+            parse_mode="Markdown"
+        )
+        bot.register_next_step_handler(message, _otp_handle_creds)
+        return
+
+    email_val   = parts[0].strip()
+    password    = parts[1].strip()
+    ref_token   = parts[2].strip()
+    client_id   = "|".join(p.strip() for p in parts[3:])  # client_id may contain |
+
+    _otp_cred_cache[uid] = {
+        "email":         email_val,
+        "password":      password,
+        "refresh_token": ref_token,
+        "client_id":     client_id,
+    }
+
+    found = _otp_fetch_and_reply(message.chat.id, uid)
+
+    # Always loop: show prompt and wait for next credentials
+    _otp_send_loop_prompt(message.chat.id)
+    bot.register_next_step_handler(message, _otp_handle_creds)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("otp_refresh|"))
+def otp_refresh_cb(call):
+    """🔄 Refresh button — re-check same credentials."""
+    uid = call.data.split("|", 1)[1]
+    bot.answer_callback_query(call.id, "🔄 Re-checking inbox...")
+    # Delete the old error card
+    try: bot.delete_message(call.message.chat.id, call.message.message_id)
+    except Exception: pass
+
+    _otp_fetch_and_reply(call.message.chat.id, uid)
+
+    # Re-enter loop
+    _otp_send_loop_prompt(call.message.chat.id)
+    bot.register_next_step_handler(call.message, _otp_handle_creds)
+
+
+# ─────────────────────────────────────────────────────────────
+
 @bot.message_handler(commands=["start", "menu"])
 def welcome(message):
     uid  = str(message.chat.id)
@@ -5939,9 +6152,12 @@ if __name__ == "__main__":
     # Auto-backup after 24h
     t = threading.Timer(86400, _schedule_auto_backup); t.daemon = True; t.start()
 
-    # Clear all user-facing commands — restore ☰ three-line menu with /start only
+    # Clear all user-facing commands — restore ☰ three-line menu
     bot.set_my_commands(
-        [types.BotCommand("start", "🚀 বট শুরু করুন / মেনু খুলুন")],
+        [
+            types.BotCommand("start",    "🚀 Start - বট শুরু করুন"),
+            types.BotCommand("get_code", "☎️ Get Code - Read OTP"),
+        ],
         scope=types.BotCommandScopeDefault()
     )
     # Set "Get Mail Code" WebApp as the ☰ three-line menu button for all users
