@@ -980,19 +980,21 @@ def keep_alive():
 # ─────────────────────────────────────────────
 try:
     from config import (
-        BOT_TOKEN         as _CFG_BOT_TOKEN,
-        ADMIN_ID          as _CFG_ADMIN_ID,
-        USER_API_ID       as _CFG_USER_API_ID,
-        USER_API_HASH     as _CFG_USER_API_HASH,
+        BOT_TOKEN           as _CFG_BOT_TOKEN,
+        ADMIN_ID            as _CFG_ADMIN_ID,
+        USER_API_ID         as _CFG_USER_API_ID,
+        USER_API_HASH       as _CFG_USER_API_HASH,
         USER_SESSION_STRING as _CFG_USER_SESSION,
-        APP_DOMAIN        as _CFG_APP_DOMAIN,
+        APP_DOMAIN          as _CFG_APP_DOMAIN,
+        MONGODB_URI         as _CFG_MONGODB_URI,
     )
-    API_TOKEN    = _CFG_BOT_TOKEN
-    ADMIN_ID     = _CFG_ADMIN_ID
-    USER_API_ID  = _CFG_USER_API_ID
-    USER_API_HASH = _CFG_USER_API_HASH
-    USER_SESSION  = _CFG_USER_SESSION
+    API_TOKEN      = _CFG_BOT_TOKEN
+    ADMIN_ID       = _CFG_ADMIN_ID
+    USER_API_ID    = _CFG_USER_API_ID
+    USER_API_HASH  = _CFG_USER_API_HASH
+    USER_SESSION   = _CFG_USER_SESSION
     _REPLIT_DOMAIN = _CFG_APP_DOMAIN
+    MONGODB_URI    = _CFG_MONGODB_URI
 except ImportError:
     API_TOKEN     = os.environ.get("BOT_TOKEN", "")
     ADMIN_ID      = int(os.environ.get("ADMIN_ID", "7522357347"))
