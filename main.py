@@ -2177,6 +2177,9 @@ def _otp_show_email_card(chat_id: int, uid: str):
     s = _otp_state.setdefault(uid, {})
     s["email_card_msg_id"] = msg.message_id
     s.setdefault("result_msg_ids", [])
+    # Register handler so new credentials typed directly (without clicking button)
+    # are also caught and old messages cleaned up properly
+    bot.register_next_step_handler(msg, _otp_handle_creds)
 
 
 def _otp_set_refresh_btn(chat_id: int, uid: str):
@@ -2362,6 +2365,8 @@ def otp_read_btn_cb(call):
         bot.answer_callback_query(call.id, "✅ Already done!")
         return
     bot.answer_callback_query(call.id, "⏳ Checking inbox...")
+    # Clear any pending next_step_handler (from email card display) to avoid double-fire
+    bot.clear_step_handler_by_chat_id(call.message.chat.id)
     found = _otp_do_fetch(call.message.chat.id, uid)
     if found:
         _otp_send_loop_prompt(call.message.chat.id, uid)
@@ -2377,6 +2382,8 @@ def otp_refresh_cb(call):
         bot.answer_callback_query(call.id, "✅ Already done!")
         return
     bot.answer_callback_query(call.id, "🔄 Refreshing...")
+    # Clear any pending next_step_handler to avoid double-fire
+    bot.clear_step_handler_by_chat_id(call.message.chat.id)
     found = _otp_do_fetch(call.message.chat.id, uid)
     if found:
         _otp_send_loop_prompt(call.message.chat.id, uid)
