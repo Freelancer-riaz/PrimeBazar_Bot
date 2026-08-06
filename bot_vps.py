@@ -2193,6 +2193,24 @@ def _otp_set_refresh_btn(chat_id: int, uid: str):
         pass
 
 
+def _otp_remove_email_card_btn(chat_id: int, uid: str):
+    """Remove button from email card after OTP is found (prevents double-trigger)."""
+    s   = _otp_state.get(uid, {})
+    mid = s.get("email_card_msg_id")
+    if not mid:
+        return
+    email = _otp_cred_cache.get(uid, {}).get("email") or s.get("last_email", "?")
+    try:
+        bot.edit_message_text(
+            f"📧  `{email}`  ✅",
+            chat_id, mid,
+            parse_mode="Markdown",
+            reply_markup=None
+        )
+    except Exception:
+        pass
+
+
 def _otp_do_fetch(chat_id: int, uid: str) -> bool:
     """
     Fetch OTP using cached credentials. Sends compact one/two-line messages.
@@ -2200,9 +2218,7 @@ def _otp_do_fetch(chat_id: int, uid: str) -> bool:
     """
     creds = _otp_cred_cache.get(uid)
     if not creds:
-        bot.send_message(chat_id,
-            "❌ Session expired · /get\\_code দিয়ে আবার শুরু করুন",
-            parse_mode="Markdown")
+        # Silently ignore — button already used or session already complete
         return False
 
     email = creds.get("email", "?")
@@ -2259,6 +2275,10 @@ def _otp_do_fetch(chat_id: int, uid: str) -> bool:
         # ✅ OTP found — 3-line success (email & OTP each copyable with one tap)
         bst  = _otp_bst_time(result.get("received", ""))
         code = result["code"]
+        # Save email in state before popping creds (needed for card edit)
+        _otp_state.setdefault(uid, {})["last_email"] = email
+        # Remove button from email card (prevents double-trigger)
+        _otp_remove_email_card_btn(chat_id, uid)
         em = bot.send_message(chat_id,
             f"📩 Mail : `{email}`\n"
             f"🔑 Otp  : `{code}`\n"
@@ -2337,6 +2357,10 @@ def _otp_handle_creds(message):
 def otp_read_btn_cb(call):
     """▶️ Read OTP button clicked."""
     uid = call.data.split("|", 1)[1]
+    # If no creds (double-tap or stale button), silently ignore
+    if not _otp_cred_cache.get(uid):
+        bot.answer_callback_query(call.id, "✅ Already done!")
+        return
     bot.answer_callback_query(call.id, "⏳ Checking inbox...")
     found = _otp_do_fetch(call.message.chat.id, uid)
     if found:
@@ -2348,6 +2372,10 @@ def otp_read_btn_cb(call):
 def otp_refresh_cb(call):
     """🔄 Refresh button clicked."""
     uid = call.data.split("|", 1)[1]
+    # If no creds (double-tap or stale button), silently ignore
+    if not _otp_cred_cache.get(uid):
+        bot.answer_callback_query(call.id, "✅ Already done!")
+        return
     bot.answer_callback_query(call.id, "🔄 Refreshing...")
     found = _otp_do_fetch(call.message.chat.id, uid)
     if found:
