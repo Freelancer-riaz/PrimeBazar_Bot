@@ -1223,6 +1223,40 @@ def get_products():      return market_data.get("products", {})
 def get_categories():    return market_data.get("categories", {})
 def get_vpn_durations(): return market_data.get("vpn_durations", {})
 
+def category_delivery_type(cat_key: str) -> str:
+    """Return the configured delivery mode for a category.
+
+    ``mail`` and ``vpn`` intentionally keep their legacy flows.  New
+    categories can use ``stock``, ``manual`` or ``supplier`` without adding
+    another hard-coded category branch.
+    """
+    if cat_key == "mail":
+        return "mail"
+    if cat_key == "vpn":
+        return "vpn"
+    mode = (get_categories().get(cat_key, {}).get("delivery_type") or "stock").lower()
+    return mode if mode in {"stock", "manual", "supplier"} else "stock"
+
+def _category_template(cat_key: str, lang: str) -> str:
+    """Get a category-specific success template, falling back to shop text."""
+    cat = get_categories().get(cat_key, {})
+    key = "success_message_bn" if lang == "bn" else "success_message_en"
+    return cat.get(key) or STRINGS.get(lang, STRINGS["bn"]).get(
+        "shop_success", "✅ *Purchase Successful!*\nCost: *{total} BDT*"
+    )
+
+def _render_category_template(template: str, **values) -> str:
+    """Render an admin-authored message without failing on unused placeholders."""
+    try:
+        return template.format(**values)
+    except (KeyError, ValueError):
+        # A typo in a custom message must not break a paid order.  Preserve the
+        # message and replace only placeholders that have known values.
+        result = str(template)
+        for key, value in values.items():
+            result = result.replace("{" + key + "}", str(value))
+        return result
+
 def disp_name(p_info: dict, fallback_key: str) -> str:
     """Display name for a product — falls back to its internal dict key."""
     return (p_info or {}).get("name") or fallback_key
@@ -1612,7 +1646,8 @@ async def _click_button(client, message, btn_text: str, timeout: float = 5):
 
 # ── Sophisticated Navigation ──────────────────────────────────────────
 
-async def _vpn_buy_nav_async(product_name: str, dur_key: str, qty: int):
+async def _vpn_buy_nav_async(product_name: str, dur_key: str, qty: int,
+                             category_info: dict | None = None):
     """
     Full navigation-based VPN purchase via supplier bot inline buttons.
 
@@ -1635,9 +1670,22 @@ async def _vpn_buy_nav_async(product_name: str, dur_key: str, qty: int):
 
     supplier      = cfg("supplier_bot_username")
     initial_cmd   = cfg("supplier_initial_cmd")        or "/start"
-    vpn_btn_txt   = cfg("supplier_vpn_button")         or "🛡️ Buy VPN"
-    dur_btns      = cfg("supplier_duration_buttons")   or {}
-    confirm_txt   = cfg("supplier_confirm_button")     or "✅ Confirm"
+    category_info = category_info or {}
+    vpn_btn_txt   = (
+        category_info.get("supplier_button")
+        or cfg("supplier_vpn_button")
+        or "🛡️ Buy VPN"
+    )
+    dur_btns      = (
+        category_info.get("supplier_duration_buttons")
+        or cfg("supplier_duration_buttons")
+        or {}
+    )
+    confirm_txt   = (
+        category_info.get("supplier_confirm_button")
+        or cfg("supplier_confirm_button")
+        or "✅ Confirm"
+    )
     btn_map       = cfg("button_map")                  or {}
     # Resolve duration: use mapped name if set, else fall back to dur_btns entry
     raw_dur_text  = dur_btns.get(dur_key, "")
@@ -2719,8 +2767,12 @@ def show_items(call):
         _show_mail_products(call); return
     prods = get_products()
     mk    = types.InlineKeyboardMarkup(row_width=2)
+    delivery_type = category_delivery_type(cat)
+    show_stock = delivery_type == "stock"
     btns  = [types.InlineKeyboardButton(
-                 f"{disp_name(p_info, p_name)} 📦 {get_stock_count(p_name)}pcs", callback_data=f"buy|{p_name}")
+                 f"{disp_name(p_info, p_name)}"
+                 + (f" 📦 {get_stock_count(p_name)}pcs" if show_stock else ""),
+                 callback_data=f"buy|{p_name}")
              for p_name, p_info in prods.items() if p_info.get("cat") == cat]
     if btns: mk.add(*btns)
     mk.add(types.InlineKeyboardButton(S.get("back","🔙 Back"), callback_data="back_to_cat"))
@@ -3133,8 +3185,10 @@ def ask_qty(call):
     p_name = call.data.split("|", 1)[1]
     prods  = get_products()
     u      = get_user(uid)
+    delivery_type = category_delivery_type(prods.get(p_name, {}).get("cat", ""))
     stock  = get_stock_count(p_name)
-    if stock == 0:
+    # Supplier and manual categories do not consume local uploaded stock.
+    if delivery_type in {"mail", "stock"} and stock == 0:
         bot.answer_callback_query(call.id, S.get("shop_no_stock","❌ Out of Stock!"), show_alert=True); return
     qty    = 1
     price  = prods[p_name]["price"]
@@ -3153,6 +3207,13 @@ def ask_qty(call):
             f"⏳ *Duration:* {duration}\n"
             f"💸 *Price:* *{total} BDT*\n"
             f"💰 *Your Balance:* {u['balance']:.2f} BDT\n✨━━━━━━━━━━━━━━━━━━✨"
+        )
+    elif delivery_type == "manual":
+        order_txt = _render_category_template(
+            _category_template(prods[p_name].get("cat"), get_lang(uid)),
+            product=disp_name(prods[p_name], p_name), duration=prods[p_name].get("duration", "N/A"),
+            qty=qty, total=total, order_id="—", balance=round(u["balance"], 2),
+            delivery="⏳ অ্যাডমিন অর্ডারটি প্রসেস করবেন।"
         )
     else:
         order_txt = S.get("shop_order","📋 *Order Summary:*\n📦 {product} × {qty}\n💸 {total} BDT").format(
@@ -3178,7 +3239,9 @@ def finalize_order(call):
         bot.answer_callback_query(call.id,
             S.get("shop_low_bal","❌ Insufficient balance! {bal} < {total}").format(bal=bal, total=total),
             show_alert=True); return
-    is_vpn = prods[p_name].get("cat") == "vpn"
+    cat_key = prods[p_name].get("cat", "")
+    delivery_type = category_delivery_type(cat_key)
+    is_vpn = cat_key == "vpn"
     _processing_uids.add(uid)
     bot.answer_callback_query(call.id, "⏳ Processing...")
     order_id = uuid.uuid4().hex[:8]
@@ -3198,18 +3261,34 @@ def finalize_order(call):
                 f"✨━━━━━━━━━━━━━━━━━━✨"
             )
             _deliver_vpn(uid, call, p_name, qty, total, success_msg, S)
+        elif delivery_type == "manual":
+            _deliver_vpn_manual(uid, p_name, p_info, qty, total, S, order_id)
+        elif delivery_type == "supplier":
+            # Supplier categories use the same reliable navigation engine as
+            # VPN, but their button texts and success message are category-
+            # configurable.
+            success_msg = _render_category_template(
+                _category_template(cat_key, get_lang(uid)),
+                product=disp_name(p_info, p_name),
+                duration=p_info.get("duration", "N/A"),
+                qty=qty, total=total, order_id=order_id,
+                balance=round(get_user(uid)["balance"], 2), delivery=""
+            )
+            _deliver_vpn(uid, call, p_name, qty, total, success_msg, S)
+        elif delivery_type == "stock":
+            _deliver_category_stock(uid, p_name, p_info, qty, total, order_id, S)
         else:
-            # Non-VPN non-mail fallback (future categories)
-            raise ValueError("Unknown product category — use the mail flow.")
+            raise ValueError(f"Unknown delivery type: {delivery_type}")
         # Update stats (only reaches here on success)
         update_user(uid, "balance", -total)
         update_user(uid, "total_orders", 1)
         now = bst_now()
         is_manual_vpn = is_vpn and _is_manual_delivery_vpn(p_info, p_name)
+        is_manual_order = is_manual_vpn or delivery_type == "manual"
         user_data[uid]["orders"].append({"order_id": order_id, "product": p_name, "qty": qty, "total": total, "date": now})
         user_data[uid]["last_purchase_time"] = now
         save_data(user_data)
-        if not is_manual_vpn:
+        if not is_manual_order:
             # Manual VPN orders get their review prompt only after the admin
             # actually delivers credentials (see _adm_send_vpn_deliver).
             _prompt_review(uid, order_id, p_name, S)
@@ -3228,7 +3307,7 @@ def finalize_order(call):
                 parse_mode="Markdown")
         except Exception: pass
         rem_stock = get_stock_count(p_name)
-        if rem_stock < 5:
+        if delivery_type in {"mail", "stock"} and rem_stock < 5:
             bot.send_message(ADMIN_ID,
                 f"⚠️ *লো স্টক অ্যালার্ট!*\n✨━━━━━━━━━━━━✨\n📦 *{p_name}* — মাত্র *{rem_stock}* পিস বাকি!",
                 parse_mode="Markdown")
@@ -3315,11 +3394,49 @@ def _deliver_mail(uid, call, p_name, qty, total, success_msg, S):
                       caption=S.get("shop_success","✅ *Purchase Successful!*\nCost: *{total} BDT*").format(total=total),
                       parse_mode="Markdown")
 
+def _deliver_category_stock(uid, p_name, p_info, qty, total, order_id, S):
+    """Deliver uploaded rows for a configurable stock-backed category."""
+    rows = _load_stock_rows(p_name)
+    if len(rows) < qty:
+        raise ValueError(f"Not enough stock: have {len(rows)}, need {qty}")
+    to_send = rows[:qty]
+    db_save_stock(p_name, rows[qty:])
+    _low_stock_alert(p_name, len(rows) - qty)
+
+    out = io.BytesIO()
+    with pd.ExcelWriter(out, engine="openpyxl") as writer:
+        pd.DataFrame(to_send).to_excel(writer, index=False)
+    out.seek(0)
+
+    cat_key = p_info.get("cat", "")
+    template = _category_template(cat_key, get_lang(uid))
+    caption = _render_category_template(
+        template,
+        product=disp_name(p_info, p_name),
+        duration=p_info.get("duration", "N/A"),
+        qty=qty,
+        total=total,
+        order_id=order_id,
+        balance=round(get_user(uid).get("balance", 0), 2),
+        time=bst_now(),
+        delivery=f"{p_name}.xlsx",
+        credentials=f"{p_name}.xlsx",
+    )
+    bot.send_document(
+        uid,
+        out,
+        visible_file_name=f"{p_name.replace(' ', '_')}_{qty}_stock.xlsx",
+        caption=caption,
+        parse_mode="Markdown",
+    )
+
 
 def _deliver_vpn_manual(uid, p_name, p_info, qty, total, S, order_id=None):
-    """Manual delivery — notify user to wait, alert admin to send VPN access."""
+    """Manual delivery — notify user to wait, alert admin to send access."""
     d_name   = disp_name(p_info, p_name)
     duration = p_info.get("duration", "N/A")
+    cat_key  = p_info.get("cat", "vpn")
+    cat_info = get_categories().get(cat_key, {})
     u        = get_user(uid)
     user_name = u.get("name") or u.get("first_name") or u.get("username") or "Unknown"
     username  = u.get("username") or "—"
@@ -3334,42 +3451,54 @@ def _deliver_vpn_manual(uid, p_name, p_info, qty, total, S, order_id=None):
         "user_name": user_name,
         "username":  username,
         "order_id":  order_id,
+        "cat_key":   cat_key,
+        "delivery_type": category_delivery_type(cat_key),
+        "success_message_bn": cat_info.get("success_message_bn", ""),
+        "success_message_en": cat_info.get("success_message_en", ""),
     }
     _save_manual_orders(_pending_manual_orders)
-    # Notify user
-    bot.send_message(
-        uid,
-        f"✅ *আপনার Purchase সফলভাবে সম্পন্ন হয়েছে!*\n"
-        f"✨━━━━━━━━━━━━━━━━━━✨\n"
-        f"🛡️ *Product:* {d_name}\n"
-        f"⏳ *Duration:* {duration}\n"
-        f"💸 *Total Paid:* *{total} BDT*\n"
-        f"✨━━━━━━━━━━━━━━━━━━✨\n"
-        f"🕐 অনুগ্রহ করে *১ থেকে ১০ মিনিট* অপেক্ষা করুন।\n"
-        f"আপনার VPN Access শীঘ্রই পাঠিয়ে দেওয়া হবে। 🚀",
-        parse_mode="Markdown"
-    )
+    # Notify user. Legacy VPN text remains unchanged; new manual categories
+    # can fully control this message from Category Management.
+    if cat_key == "vpn":
+        pending_msg = (
+            f"✅ *আপনার Purchase সফলভাবে সম্পন্ন হয়েছে!*\n"
+            f"✨━━━━━━━━━━━━━━━━━━✨\n"
+            f"🛡️ *Product:* {d_name}\n"
+            f"⏳ *Duration:* {duration}\n"
+            f"💸 *Total Paid:* *{total} BDT*\n"
+            f"✨━━━━━━━━━━━━━━━━━━✨\n"
+            f"🕐 অনুগ্রহ করে *১ থেকে ১০ মিনিট* অপেক্ষা করুন।\n"
+            f"আপনার Access শীঘ্রই পাঠিয়ে দেওয়া হবে। 🚀"
+        )
+    else:
+        template = _category_template(cat_key, get_lang(uid))
+        pending_msg = _render_category_template(
+            template, product=d_name, duration=duration, qty=qty, total=total,
+            order_id=order_id or "—", balance=round(u.get("balance", 0), 2),
+            delivery="⏳ অ্যাডমিন আপনার অর্ডারটি প্রসেস করছেন।"
+        )
+    bot.send_message(uid, pending_msg, parse_mode="Markdown")
     # Alert admin for manual delivery
     try:
         mk_adm = types.InlineKeyboardMarkup()
         mk_adm.add(
             types.InlineKeyboardButton(
-                "📨 Send VPN to User", callback_data=f"adm_send_vpn|{uid}"
+                "📨 Send Access to User", callback_data=f"adm_send_vpn|{uid}"
             )
         )
         bot.send_message(
             ADMIN_ID,
-            f"🔔 *Manual VPN Delivery Required!*\n"
+            f"🔔 *Manual Delivery Required!*\n"
             f"✨━━━━━━━━━━━━━━━━━━✨\n"
             f"👤 User ID: `{uid}`\n"
             f"🏷️ Name: {user_name}\n"
             f"📲 Username: @{username}\n"
-            f"🛡️ Product: *{d_name}*\n"
+            f"📦 Product: *{d_name}*\n"
             f"⏳ Duration: *{duration}*\n"
             f"🔢 Qty: *{qty}* | 💰 Total: *{total} BDT*\n"
             f"🕐 Time: {now}\n"
             f"✨━━━━━━━━━━━━━━━━━━✨\n"
-            f"➡️ নিচের বাটনে ক্লিক করে VPN Access পাঠান।",
+            f"➡️ নিচের বাটনে ক্লিক করে User-কে delivery পাঠান।",
             reply_markup=mk_adm,
             parse_mode="Markdown"
         )
@@ -3379,7 +3508,7 @@ def _deliver_vpn_manual(uid, p_name, p_info, qty, total, S, order_id=None):
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("adm_send_vpn|"))
 def adm_send_vpn_start(call):
-    """Admin clicks 'Send VPN to User' — show order info, ask for email|password."""
+    """Admin clicks manual delivery — show order info and ask for delivery."""
     if call.message.chat.id != ADMIN_ID: return
     target_uid = call.data.split("|")[1]
     bot.answer_callback_query(call.id)
@@ -3390,16 +3519,16 @@ def adm_send_vpn_start(call):
     u_bal    = round(get_user(target_uid).get("balance", 0), 2)
     msg = bot.send_message(
         ADMIN_ID,
-        f"📨 *VPN Credentials পাঠান*\n"
+        f"📨 *User Delivery পাঠান*\n"
         f"✨━━━━━━━━━━━━━━━━━━✨\n"
         f"👤 User: `{target_uid}`\n"
-        f"🛡️ Product: *{d_name}*\n"
+        f"📦 Product: *{d_name}*\n"
         f"⏳ Duration: *{duration}*\n"
         f"💸 Paid: *{total} BDT*\n"
         f"💰 User Balance Now: *{u_bal} BDT*\n"
         f"✨━━━━━━━━━━━━━━━━━━✨\n"
-        f"এখন শুধু *email* এবং *password* এই ফরম্যাটে পাঠান:\n"
-        f"`email@example.com|YourPassword123`\n\n"
+        f"এখন User-কে যে delivery দিতে চান সেটি পাঠান।\n"
+        f"ইচ্ছা করলে `email|password` ফরম্যাটও ব্যবহার করতে পারেন।\n\n"
         f"❌ বাতিল করতে লিখুন: `/cancel`",
         parse_mode="Markdown"
     )
@@ -3407,7 +3536,7 @@ def adm_send_vpn_start(call):
 
 
 def _adm_send_vpn_deliver(message, target_uid):
-    """Admin sends email|password — auto-format and deliver to user."""
+    """Admin sends delivery text — format and deliver to the buyer."""
     if message.chat.id != ADMIN_ID: return
     if message.text and message.text.strip().lower() == "/cancel":
         bot.send_message(ADMIN_ID, "❌ বাতিল করা হয়েছে।")
@@ -3419,6 +3548,7 @@ def _adm_send_vpn_deliver(message, target_uid):
         d_name   = order.get("d_name", "—")
         duration = order.get("duration", "—")
         total    = order.get("total", "—")
+        cat_key  = order.get("cat_key", "vpn")
         now      = bst_now()
         u_bal    = f"{round(get_user(target_uid).get('balance', 0), 2):.2f}"
 
@@ -3433,23 +3563,42 @@ def _adm_send_vpn_deliver(message, target_uid):
         else:
             cred_lines = f"`{cred_block}`"
 
-        # Send the formatted VPN access to the user
-        bot.send_message(
-            target_uid,
-            f"🛡️ *আপনার VPN Access এসে গেছে!*\n"
-            f"✨━━━━━━━━━━━━━━━━━━✨\n"
-            f"📦 *Product:* {d_name}\n"
-            f"⏳ *Duration:* {duration}\n"
-            f"💸 *Total Paid:* {total} BDT\n"
-            f"💰 *Balance:* {u_bal} BDT\n"
-            f"🕐 *Time:* {now}\n"
-            f"✨━━━━━━━━━━━━━━━━━━✨\n"
-            f"{cred_lines}\n"
-            f"✨━━━━━━━━━━━━━━━━━━✨\n"
-            f"👆 _উপরের Email/Password-এ ট্যাপ করলে কপি হয়ে যাবে_\n"
-            f"🎉 *ধন্যবাদ! Prime Bazar ব্যবহার করার জন্য।*",
-            parse_mode="Markdown"
-        )
+        if cat_key == "vpn" and not order.get("success_message_bn") and not order.get("success_message_en"):
+            final_msg = (
+                f"🛡️ *আপনার VPN Access এসে গেছে!*\n"
+                f"✨━━━━━━━━━━━━━━━━━━✨\n"
+                f"📦 *Product:* {d_name}\n"
+                f"⏳ *Duration:* {duration}\n"
+                f"💸 *Total Paid:* {total} BDT\n"
+                f"💰 *Balance:* {u_bal} BDT\n"
+                f"🕐 *Time:* {now}\n"
+                f"✨━━━━━━━━━━━━━━━━━━✨\n"
+                f"{cred_lines}\n"
+                f"✨━━━━━━━━━━━━━━━━━━✨\n"
+                f"👆 _উপরের Email/Password-এ ট্যাপ করলে কপি হয়ে যাবে_\n"
+                f"🎉 *ধন্যবাদ! Prime Bazar ব্যবহার করার জন্য।*"
+            )
+        else:
+            lang = get_lang(target_uid)
+            template = (
+                order.get("success_message_bn" if lang == "bn" else "success_message_en")
+                or _category_template(cat_key, lang)
+            )
+            final_msg = _render_category_template(
+                template,
+                product=d_name,
+                duration=duration,
+                qty=order.get("qty", 1),
+                total=total,
+                order_id=order.get("order_id", "—"),
+                balance=u_bal,
+                time=now,
+                delivery=cred_lines,
+                credentials=cred_block,
+            )
+            if "{delivery}" not in template and "{credentials}" not in template:
+                final_msg += f"\n\n{cred_lines}"
+        bot.send_message(target_uid, final_msg, parse_mode="Markdown")
         # Confirm to admin
         bot.send_message(
             ADMIN_ID,
@@ -3492,7 +3641,11 @@ def _deliver_vpn(uid, call, p_name, qty, total, success_msg, S):
     )
     # Total outer timeout: 5 steps × 14s each × qty + buffer
     outer_timeout = max(120, qty * 80)
-    result = _run_async(_vpn_buy_nav_async(p_name, dur_key, qty), timeout=outer_timeout)
+    cat_info = get_categories().get(prods[p_name].get("cat", "vpn"), {})
+    result = _run_async(
+        _vpn_buy_nav_async(p_name, dur_key, qty, cat_info),
+        timeout=outer_timeout
+    )
     try: bot.delete_message(uid, note.message_id)
     except Exception: pass
 
@@ -3508,19 +3661,34 @@ def _deliver_vpn(uid, call, p_name, qty, total, success_msg, S):
     if not valid:
         raise SupplierTimeoutError("Supplier returned empty credentials (likely insufficient balance).")
 
-    delivery = success_msg + "\n\n"
+    p_info = prods[p_name]
+    cat_key = p_info.get("cat", "vpn")
+    lang = get_lang(uid)
+    credentials_text = ""
     for i, (mail, pw) in enumerate(valid, 1):
-        delivery += (
+        credentials_text += (
             f"🛡️ *VPN Account #{i}*\n"
             f"✨━━━━━━━━━━━━✨\n"
             f"📧 *Email:*\n`{mail}`\n\n"
             f"🔑 *Password:*\n`{pw}`\n"
             f"✨━━━━━━━━━━━━✨\n\n"
         )
-    delivery += (
+    credentials_text += (
         f"👆 _Email বা Password-এ ট্যাপ করলে আলাদাভাবে কপি হবে_\n"
         f"🎉 *ধন্যবাদ! Prime Bazar ব্যবহার করার জন্য।* 🛒"
     )
+    if cat_key == "vpn":
+        delivery = success_msg + "\n\n" + credentials_text
+    else:
+        template = _category_template(cat_key, lang)
+        delivery = _render_category_template(
+            template, product=disp_name(p_info, p_name),
+            duration=p_info.get("duration", "N/A"), qty=qty, total=total,
+            order_id="—", balance=round(get_user(uid).get("balance", 0), 2),
+            time=bst_now(), delivery=credentials_text, credentials=credentials_text
+        )
+        if "{delivery}" not in template and "{credentials}" not in template:
+            delivery += "\n\n" + credentials_text
     bot.send_message(uid, delivery.strip(), parse_mode="Markdown")
     # Check supplier balance after every VPN purchase (non-blocking)
     threading.Thread(target=_check_and_alert_balance_once, daemon=True).start()
@@ -5946,12 +6114,22 @@ def vpndur_delete(call):
 # ─────────────────────────────────────────────
 def _adm_cats(call):
     cats = get_categories()
-    mk   = types.InlineKeyboardMarkup(row_width=2)
+    mk   = types.InlineKeyboardMarkup(row_width=3)
     for cat_key, cat_info in cats.items():
-        mk.add(
-            types.InlineKeyboardButton(f"{cat_info['emoji']} {cat_info['name']}", callback_data=f"cat_rename|{cat_key}"),
-            types.InlineKeyboardButton("🗑️ Delete", callback_data=f"cat_del|{cat_key}"),
-        )
+        buttons = [
+            types.InlineKeyboardButton(
+                f"{cat_info['emoji']} {cat_info['name']}",
+                callback_data=f"cat_rename|{cat_key}",
+            ),
+        ]
+        if cat_key not in {"mail", "vpn"}:
+            buttons.append(types.InlineKeyboardButton(
+                "⚙️ Settings", callback_data=f"cat_settings|{cat_key}"
+            ))
+        buttons.append(types.InlineKeyboardButton(
+            "🗑️ Delete", callback_data=f"cat_del|{cat_key}"
+        ))
+        mk.add(*buttons)
     mk.add(
         types.InlineKeyboardButton("➕ Add Category", callback_data="cat_add"),
         types.InlineKeyboardButton("🔙 Back",         callback_data="adm|back"),
@@ -5971,18 +6149,120 @@ def cat_add_start(call):
     if call.message.chat.id != ADMIN_ID: return
     bot.answer_callback_query(call.id)
     msg = bot.send_message(ADMIN_ID,
-        "📦 *New Category*\nFormat: `key|emoji|Full Name`\nExample: `food|🍕|Food & Drinks`",
+        "📦 *New Category*\n"
+        "এক লাইনে লিখুন:\n"
+        "`key|emoji|Full Name|delivery_type|বাংলা success message|English success message|Supplier button|Confirm button`\n\n"
+        "delivery_type: `stock` / `manual` / `supplier`\n"
+        "Placeholder: `{product}` `{duration}` `{qty}` `{total}` `{order_id}` `{balance}` `{time}` `{delivery}` `{credentials}`\n\n"
+        "উদাহরণ:\n"
+        "`proxy|🧩|Buy Proxy|supplier|✅ Proxy Ready! {delivery}|✅ Proxy Ready! {delivery}|🧩 Buy Proxy|✅ Confirm`",
         parse_mode="Markdown")
     bot.register_next_step_handler(msg, cat_add_save)
 
 def cat_add_save(message):
     if message.chat.id != ADMIN_ID: return
     try:
-        parts = message.text.strip().split("|")
-        key = parts[0].strip().lower().replace(" ","_"); emoji = parts[1].strip(); name = parts[2].strip()
-        market_data["categories"][key] = {"name": name, "emoji": emoji}; save_market_data(market_data)
+        parts = message.text.strip().split("|", 7)
+        if len(parts) == 3:
+            key, emoji, name = (part.strip() for part in parts)
+            delivery_type, bn_msg, en_msg = "stock", "", ""
+            supplier_button, confirm_button = "", ""
+        elif len(parts) >= 6:
+            key = parts[0].strip().lower().replace(" ","_")
+            emoji = parts[1].strip()
+            name = parts[2].strip()
+            delivery_type = parts[3].strip().lower()
+            bn_msg = parts[4].strip()
+            en_msg = parts[5].strip()
+            supplier_button = parts[6].strip() if len(parts) > 6 else ""
+            confirm_button = parts[7].strip() if len(parts) > 7 else ""
+        else:
+            raise ValueError("invalid category format")
+        key = key.strip().lower().replace(" ","_")
+        emoji = emoji.strip()
+        name = name.strip()
+        if delivery_type not in {"stock", "manual", "supplier"}:
+            raise ValueError("invalid delivery type")
+        entry = {
+            "name": name,
+            "emoji": emoji,
+            "delivery_type": delivery_type,
+            "success_message_bn": bn_msg,
+            "success_message_en": en_msg,
+        }
+        if supplier_button:
+            entry["supplier_button"] = supplier_button
+        if confirm_button:
+            entry["supplier_confirm_button"] = confirm_button
+        market_data["categories"][key] = entry
+        save_market_data(market_data)
         bot.send_message(ADMIN_ID, f"✅ Category *{name}* added!", parse_mode="Markdown")
-    except Exception: bot.send_message(ADMIN_ID, "❌ Wrong format. Use: `key|emoji|Full Name`", parse_mode="Markdown")
+    except Exception:
+        bot.send_message(
+            ADMIN_ID,
+            "❌ ভুল format। `key|emoji|Full Name|stock/manual/supplier|বাংলা message|English message|Supplier button|Confirm button` ব্যবহার করুন।",
+            parse_mode="Markdown",
+        )
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("cat_settings|"))
+def cat_settings_start(call):
+    """Edit delivery mode, success messages, and supplier button labels."""
+    if call.message.chat.id != ADMIN_ID:
+        return
+    cat_key = call.data.split("|", 1)[1]
+    cat = get_categories().get(cat_key)
+    if not cat or cat_key in {"mail", "vpn"}:
+        bot.answer_callback_query(call.id, "❌ এই category-র legacy logic পরিবর্তন করা যাবে না।")
+        return
+    bot.answer_callback_query(call.id)
+    current = (
+        f"বর্তমান: `{cat.get('delivery_type', 'stock')}|"
+        f"{cat.get('success_message_bn', '')}|{cat.get('success_message_en', '')}|"
+        f"{cat.get('supplier_button', '')}|{cat.get('supplier_confirm_button', '')}`"
+    )
+    msg = bot.send_message(
+        ADMIN_ID,
+        f"⚙️ *{cat.get('name', cat_key)} Settings*\n{current}\n\n"
+        "নতুন format:\n"
+        "`delivery_type|বাংলা success message|English success message|Supplier button|Confirm button`\n"
+        "delivery_type: `stock` / `manual` / `supplier`\n"
+        "Message-এর ভিতরে `|` ব্যবহার করবেন না। Placeholder: "
+        "`{product}` `{duration}` `{qty}` `{total}` `{order_id}` `{balance}` "
+        "`{time}` `{delivery}` `{credentials}`",
+        parse_mode="Markdown",
+    )
+    bot.register_next_step_handler(msg, cat_settings_save, cat_key)
+
+def cat_settings_save(message, cat_key):
+    if message.chat.id != ADMIN_ID:
+        return
+    try:
+        parts = message.text.strip().split("|", 4)
+        if len(parts) < 3:
+            raise ValueError("missing fields")
+        delivery_type = parts[0].strip().lower()
+        if delivery_type not in {"stock", "manual", "supplier"}:
+            raise ValueError("invalid delivery type")
+        cat = market_data["categories"][cat_key]
+        cat["delivery_type"] = delivery_type
+        cat["success_message_bn"] = parts[1].strip()
+        cat["success_message_en"] = parts[2].strip()
+        if len(parts) > 3 and parts[3].strip():
+            cat["supplier_button"] = parts[3].strip()
+        else:
+            cat.pop("supplier_button", None)
+        if len(parts) > 4 and parts[4].strip():
+            cat["supplier_confirm_button"] = parts[4].strip()
+        else:
+            cat.pop("supplier_confirm_button", None)
+        save_market_data(market_data)
+        bot.send_message(ADMIN_ID, "✅ Category settings আপডেট হয়েছে।", parse_mode="Markdown")
+    except Exception:
+        bot.send_message(
+            ADMIN_ID,
+            "❌ ভুল format। `delivery_type|বাংলা message|English message|Supplier button|Confirm button` দিন।",
+            parse_mode="Markdown",
+        )
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("cat_rename|"))
 def cat_rename_start(call):
@@ -6066,7 +6346,9 @@ def prod_add_start(call):
             parse_mode="Markdown")
     else:
         msg = bot.send_message(ADMIN_ID,
-            "🛍️ *Add Product*\nFormat: `Name|Duration|Price`\nExample: `Gmail|Lifetime|1.5`",
+            "🛍️ *Add Product*\n"
+            "Format: `Name|Duration|Price` অথবা supplier category হলে `Name|Duration|Price|dur_key`\n"
+            "Example: `Proxy Basic|30 Days|50`",
             parse_mode="Markdown")
     bot.register_next_step_handler(msg, prod_add_save, cat_key)
 
@@ -6083,13 +6365,17 @@ def prod_add_save(message, cat_key):
                 entry["vpn_dur"] = parts[3].strip()
             else:
                 entry["vpn_dur"] = guess_vpn_dur_key(duration)
+        elif category_delivery_type(cat_key) == "supplier" and len(parts) >= 4:
+            entry["vpn_dur"] = parts[3].strip()
         market_data["products"][key] = entry; save_market_data(market_data)
         key_info = f"\n🔑 Key: `{key}`" if key != name else ""
         bot.send_message(ADMIN_ID,
             f"✅ *{name}* added!{key_info}\n💸 {price} BDT | ⏱️ {duration}\n📁 `{filename}`",
             parse_mode="Markdown")
     except Exception:
-        fmt = "`Name|Duration|Price|dur_key`" if cat_key == "vpn" else "`Name|Duration|Price`"
+        fmt = "`Name|Duration|Price|dur_key`" if (
+            cat_key == "vpn" or category_delivery_type(cat_key) == "supplier"
+        ) else "`Name|Duration|Price`"
         bot.send_message(ADMIN_ID, f"❌ Wrong format. Use: {fmt}", parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("prod_edit|"))
