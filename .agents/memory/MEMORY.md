@@ -1,1 +1,2 @@
 - [Pyrogram utf-16-le decode crashes](pyrogram-surrogate-slicing.md) — slicing Pyrogram `Message.text`/`.caption` (e.g. `text[:200]`) can raise UnicodeDecodeError on emoji-heavy text; convert to `str()` first.
+- [Category delivery boundaries](category-delivery-boundaries.md) — keep legacy Buy Mail/Buy VPN flows frozen; configure new categories independently.
