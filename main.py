@@ -1237,6 +1237,22 @@ def category_delivery_type(cat_key: str) -> str:
     mode = (get_categories().get(cat_key, {}).get("delivery_type") or "stock").lower()
     return mode if mode in {"stock", "manual", "supplier"} else "stock"
 
+def product_shows_stock(p_name: str, p_info: dict | None = None) -> bool:
+    """Return whether this product's stock count should be visible to users.
+
+    Existing products predate the per-product setting, so their visibility is
+    inferred from the legacy/category behavior until an admin chooses a
+    value. Buy Mail remains always visible and Buy VPN remains unchanged.
+    """
+    p_info = p_info or get_products().get(p_name, {})
+    if p_info.get("cat") == "mail":
+        return True
+    if p_info.get("cat") == "vpn":
+        return False
+    if "show_stock" in p_info:
+        return bool(p_info["show_stock"])
+    return category_delivery_type(p_info.get("cat", "")) == "stock"
+
 def _category_template(cat_key: str, lang: str) -> str:
     """Get a category-specific success template, falling back to shop text."""
     cat = get_categories().get(cat_key, {})
@@ -2799,12 +2815,15 @@ def show_items(call):
     prods = get_products()
     mk    = types.InlineKeyboardMarkup(row_width=2)
     delivery_type = category_delivery_type(cat)
-    show_stock = delivery_type == "stock"
-    btns  = [types.InlineKeyboardButton(
-                 f"{disp_name(p_info, p_name)}"
-                 + (f" 📦 {get_stock_count(p_name)}pcs" if show_stock else ""),
-                 callback_data=f"buy|{p_name}")
-             for p_name, p_info in prods.items() if p_info.get("cat") == cat]
+    btns = []
+    for p_name, p_info in prods.items():
+        if p_info.get("cat") != cat:
+            continue
+        stock_label = f" 📦 {get_stock_count(p_name)}pcs" if product_shows_stock(p_name, p_info) else ""
+        btns.append(types.InlineKeyboardButton(
+            f"{disp_name(p_info, p_name)}{stock_label}",
+            callback_data=f"buy|{p_name}",
+        ))
     if btns: mk.add(*btns)
     mk.add(types.InlineKeyboardButton(S.get("back","🔙 Back"), callback_data="back_to_cat"))
     bot.edit_message_text(S.get("shop_product","🛍️ *Select a Product:*"),
@@ -6461,16 +6480,73 @@ def prod_add_save(message, cat_key):
             entry["supplier_dur_key"] = parts[3].strip()
             if len(parts) >= 5 and parts[4].strip():
                 entry["supplier_product_button"] = parts[4].strip()
-        market_data["products"][key] = entry; save_market_data(market_data)
         key_info = f"\n🔑 Key: `{key}`" if key != name else ""
+        can_customize_stock = cat_key not in {"mail", "vpn"}
+        default_show_stock = (
+            category_delivery_type(cat_key) in {"mail", "stock"}
+            if can_customize_stock else False
+        )
+        if can_customize_stock:
+            entry["show_stock"] = default_show_stock
+        market_data["products"][key] = entry
+        save_market_data(market_data)
+        if not can_customize_stock:
+            bot.send_message(
+                ADMIN_ID,
+                f"✅ *{name}* added!{key_info}\n"
+                f"💸 {price} BDT | ⏱️ {duration}\n📁 `{filename}`",
+                parse_mode="Markdown",
+            )
+            return
+        stock_markup = types.InlineKeyboardMarkup(row_width=2)
+        stock_markup.add(
+            types.InlineKeyboardButton(
+                "📦 Stock দেখাবে",
+                callback_data=f"prod_stock|{key}|1",
+            ),
+            types.InlineKeyboardButton(
+                "🙈 Stock দেখাবে না",
+                callback_data=f"prod_stock|{key}|0",
+            ),
+        )
         bot.send_message(ADMIN_ID,
-            f"✅ *{name}* added!{key_info}\n💸 {price} BDT | ⏱️ {duration}\n📁 `{filename}`",
+            f"✅ *{name}* added!{key_info}\n"
+            f"💸 {price} BDT | ⏱️ {duration}\n"
+            f"📦 Stock display: *{'ON' if default_show_stock else 'OFF'}*\n"
+            "এখন product-এর পাশে stock দেখাবে কি না বেছে নিন:",
+            reply_markup=stock_markup,
             parse_mode="Markdown")
     except Exception:
         fmt = "`Name|Duration|Price|supplier_duration_key|supplier_product_button`" if (
             cat_key == "vpn" or category_delivery_type(cat_key) == "supplier"
         ) else "`Name|Duration|Price`"
         bot.send_message(ADMIN_ID, f"❌ Wrong format. Use: {fmt}", parse_mode="Markdown")
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("prod_stock|"))
+def prod_set_stock_visibility(call):
+    if call.message.chat.id != ADMIN_ID:
+        return
+    try:
+        _, p_name, visible = call.data.split("|", 2)
+        if p_name not in market_data["products"]:
+            bot.answer_callback_query(call.id, "❌ Product not found.", show_alert=True)
+            return
+        show_stock = visible == "1"
+        market_data["products"][p_name]["show_stock"] = show_stock
+        save_market_data(market_data)
+        bot.answer_callback_query(
+            call.id,
+            "✅ Stock এখন দেখাবে।" if show_stock else "✅ Stock এখন দেখাবে না।",
+        )
+        bot.edit_message_text(
+            f"✅ *{disp_name(market_data['products'][p_name], p_name)}* এর জন্য "
+            f"stock display {'চালু' if show_stock else 'বন্ধ'} করা হয়েছে।",
+            ADMIN_ID,
+            call.message.message_id,
+            parse_mode="Markdown",
+        )
+    except Exception:
+        bot.answer_callback_query(call.id, "❌ Setting update failed.", show_alert=True)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("prod_edit|"))
 def prod_edit_menu(call):
@@ -6488,6 +6564,12 @@ def prod_edit_menu(call):
         types.InlineKeyboardButton("⏳ Edit Duration",  callback_data=f"prod_edur|{p_name}"),
         types.InlineKeyboardButton("🗑️ Delete",         callback_data=f"prod_del|{p_name}"),
     )
+    if p.get("cat") not in {"mail", "vpn"}:
+        stock_state = "দেখানো হচ্ছে" if product_shows_stock(p_name, p) else "দেখানো হচ্ছে না"
+        mk.add(types.InlineKeyboardButton(
+            f"📦 Stock: {stock_state}",
+            callback_data=f"prod_tog_stock|{p_name}",
+        ))
     # VPN-only: per-product Manual/Auto delivery toggle
     if is_vpn:
         per_toggle = p.get("manual_delivery")   # None = global rule, True = manual, False = auto
@@ -6519,6 +6601,23 @@ def prod_edit_menu(call):
     )
     bot.edit_message_text(txt, ADMIN_ID, call.message.message_id, reply_markup=mk, parse_mode="Markdown")
     bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("prod_tog_stock|"))
+def prod_toggle_stock_visibility(call):
+    if call.message.chat.id != ADMIN_ID:
+        return
+    p_name = call.data.split("|", 1)[1]
+    p = market_data.get("products", {}).get(p_name)
+    if not p or p.get("cat") in {"mail", "vpn"}:
+        bot.answer_callback_query(call.id, "❌ এই legacy product-এর setting বদলানো যাবে না.", show_alert=True)
+        return
+    p["show_stock"] = not product_shows_stock(p_name, p)
+    save_market_data(market_data)
+    bot.answer_callback_query(
+        call.id,
+        "✅ Stock display আপডেট হয়েছে।",
+    )
+    prod_edit_menu(call)
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("prod_tog_manual|"))
