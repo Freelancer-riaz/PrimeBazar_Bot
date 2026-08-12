@@ -1016,6 +1016,7 @@ bot = telebot.TeleBot(API_TOKEN, parse_mode=None)
 # ═══════════════════════════════════════════════
 _SETTINGS_DEFAULTS = {
     "support_username":           "@owner_of_pam",
+    "support_display_name":      "",
     "usd_rate":                   127,
     "welcome_photo_url":          "",
     "welcome_text":               "",
@@ -1075,6 +1076,7 @@ def cfg(key):
     return settings.get(key, _SETTINGS_DEFAULTS.get(key))
 
 def SUPPORT_USERNAME():    return cfg("support_username")
+def SUPPORT_DISPLAY_NAME(): return cfg("support_display_name") or SUPPORT_USERNAME()
 def FORCE_JOIN_CHANNELS(): return cfg("force_join_channels")
 def PAYMENT_METHODS():     return cfg("payment_methods")
 def USD_RATE():            return cfg("usd_rate")
@@ -2779,10 +2781,11 @@ def support(message):
     lang = get_lang(uid)
     S    = STRINGS.get(lang, STRINGS["bn"])
     su   = SUPPORT_USERNAME()
+    display_name = SUPPORT_DISPLAY_NAME()
     mk   = types.InlineKeyboardMarkup()
     mk.add(types.InlineKeyboardButton("💬 Contact Support", url=f"https://t.me/{su.lstrip('@')}"))
     bot.send_message(message.chat.id,
-        S.get("support_text", "☎️ *Support*\n👤 {username}").format(username=su),
+        S.get("support_text", "☎️ *Support*\n👤 {username}").format(username=display_name),
         reply_markup=mk, parse_mode="Markdown")
 
 
@@ -5660,10 +5663,14 @@ def _btnlbl_save(message, key):
 # ─────────────────────────────────────────────
 def _adm_config(call):
     supplier = cfg("supplier_bot_username") or "(not set)"
+    support_name = SUPPORT_DISPLAY_NAME()
     mk = types.InlineKeyboardMarkup(row_width=2)
     mk.add(
         types.InlineKeyboardButton("💵 USD Rate",         callback_data="cfg|usd_rate"),
-        types.InlineKeyboardButton("👤 Support Username", callback_data="cfg|support_username"),
+        types.InlineKeyboardButton("👤 Support Username/ID", callback_data="cfg|support_username"),
+    )
+    mk.add(
+        types.InlineKeyboardButton("📝 Support Display Name", callback_data="cfg|support_display_name"),
     )
     mk.add(
         types.InlineKeyboardButton("🎁 Daily Bonus Amt",  callback_data="cfg|daily_bonus_amount"),
@@ -5680,7 +5687,8 @@ def _adm_config(call):
     txt = (
         "⚙️ *Global Configuration*\n✨━━━━━━━━━━━━✨\n"
         f"💵 USD Rate: *{cfg('usd_rate')} BDT*\n"
-        f"👤 Support: *{cfg('support_username')}*\n"
+        f"👤 Support Link: *{cfg('support_username')}*\n"
+        f"📝 Support Display: *{support_name}*\n"
         f"🎁 Daily Bonus: *{cfg('daily_bonus_amount')} BDT*\n"
         f"🤖 Supplier Bot: *{supplier}*\n"
         f"📢 Channels: *{len(FORCE_JOIN_CHANNELS())}*\n"
@@ -5702,8 +5710,23 @@ def config_router(call):
         msg = bot.send_message(ADMIN_ID, f"💵 Current: *{cfg('usd_rate')} BDT*\nSend new rate:", parse_mode="Markdown")
         bot.register_next_step_handler(msg, _cfg_save_float, "usd_rate")
     elif key == "support_username":
-        msg = bot.send_message(ADMIN_ID, f"👤 Current: *{cfg('support_username')}*\nSend new username:", parse_mode="Markdown")
-        bot.register_next_step_handler(msg, _cfg_save_str, "support_username")
+        msg = bot.send_message(
+            ADMIN_ID,
+            f"👤 *Support Username/ID (Link)*\n"
+            f"Current: `{cfg('support_username')}`\n\n"
+            "নতুন Telegram username দিন (যেমন: `@my_support` বা `my_support`):",
+            parse_mode="Markdown",
+        )
+        bot.register_next_step_handler(msg, _cfg_save_support_username)
+    elif key == "support_display_name":
+        msg = bot.send_message(
+            ADMIN_ID,
+            f"📝 *Support Display Name*\n"
+            f"Current: `{SUPPORT_DISPLAY_NAME()}`\n\n"
+            "User-এর Support message-এ যে নাম দেখাতে চান সেটি লিখুন:",
+            parse_mode="Markdown",
+        )
+        bot.register_next_step_handler(msg, _cfg_save_str, "support_display_name")
     elif key == "daily_bonus_amount":
         msg = bot.send_message(ADMIN_ID, f"🎁 Current: *{cfg('daily_bonus_amount')} BDT*\nSend new amount:", parse_mode="Markdown")
         bot.register_next_step_handler(msg, _cfg_save_float, "daily_bonus_amount")
@@ -5731,6 +5754,24 @@ def _cfg_save_str(message, key):
     if message.chat.id != ADMIN_ID: return
     val = message.text.strip(); settings[key] = val; save_settings(settings)
     bot.send_message(ADMIN_ID, f"✅ *{key}* updated!", parse_mode="Markdown")
+
+def _cfg_save_support_username(message):
+    if message.chat.id != ADMIN_ID: return
+    val = (message.text or "").strip()
+    if val.startswith("https://t.me/"):
+        val = val.split("https://t.me/", 1)[1].split("/", 1)[0]
+    val = val.strip().lstrip("@")
+    if not val or any(ch.isspace() for ch in val):
+        bot.send_message(ADMIN_ID, "❌ সঠিক Telegram username দিন। উদাহরণ: `@my_support`", parse_mode="Markdown")
+        return
+    settings["support_username"] = "@" + val
+    save_settings(settings)
+    bot.send_message(
+        ADMIN_ID,
+        f"✅ Support link আপডেট হয়েছে: `@{val}`\n"
+        f"📝 Display name: `{SUPPORT_DISPLAY_NAME()}`",
+        parse_mode="Markdown",
+    )
 
 def _cfg_save_supplier(message):
     if message.chat.id != ADMIN_ID: return
