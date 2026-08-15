@@ -6272,23 +6272,91 @@ def _adm_cats(call):
 def cat_add_start(call):
     if call.message.chat.id != ADMIN_ID: return
     bot.answer_callback_query(call.id)
-    msg = bot.send_message(ADMIN_ID,
-        "📦 *New Category*\n"
-        "এক লাইনে লিখুন:\n"
-        "`key|emoji|Full Name|delivery_type|বাংলা success message|English success message|Supplier category button|Duration button|Product button|Confirm button`\n"
-        "পুরনো ৮-ফিল্ড format-ও চলবে: `...|Supplier category button|Confirm button`\n\n"
-        "delivery_type: `stock` / `manual` / `supplier`\n"
-        "Placeholder: `{product}` `{duration}` `{qty}` `{total}` `{order_id}` `{balance}` `{time}` `{delivery}` `{credentials}`\n\n"
-        "উদাহরণ:\n"
-        "`proxy|🧩|Buy Proxy|supplier|✅ Proxy Ready! {delivery}|✅ Proxy Ready! {delivery}|🧩 Buy Proxy|🛒 30 Days Proxy|Proxy Basic|✅ Confirm`",
-        parse_mode="Markdown")
-    bot.register_next_step_handler(msg, cat_add_save)
+    # আগে ধরন বাছাই করানো হচ্ছে। আগের মতো একটি দীর্ঘ format একবারে লিখতে
+    # না হওয়ায় ভুল কমে এবং বোতাম চাপার পর admin স্পষ্ট পরবর্তী ধাপ পান।
+    mk = types.InlineKeyboardMarkup(row_width=1)
+    mk.add(
+        types.InlineKeyboardButton("📦 Stock Category", callback_data="cat_add_type|stock"),
+        types.InlineKeyboardButton("📝 Manual Category", callback_data="cat_add_type|manual"),
+        types.InlineKeyboardButton("🤖 Supplier Category", callback_data="cat_add_type|supplier"),
+    )
+    bot.send_message(
+        ADMIN_ID,
+        "📦 নতুন Category যোগ করুন\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "প্রথমে Category-র delivery type বেছে নিন:",
+        reply_markup=mk,
+    )
 
-def cat_add_save(message):
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("cat_add_type|"))
+def cat_add_type_start(call):
+    if call.message.chat.id != ADMIN_ID:
+        return
+    delivery_type = call.data.split("|", 1)[1]
+    if delivery_type not in {"stock", "manual", "supplier"}:
+        bot.answer_callback_query(call.id, "❌ ভুল category type।", show_alert=True)
+        return
+
+    bot.answer_callback_query(call.id)
+    if delivery_type == "supplier":
+        fields = (
+            "`key|emoji|Full Name|বাংলা success message|English success message|"
+            "Supplier category button|Duration button|Product button|Confirm button`"
+        )
+        extra = (
+            "\n\nউদাহরণ:\n"
+            "`proxy|🧩|Buy Proxy|✅ Proxy Ready! {delivery}|"
+            "✅ Proxy Ready! {delivery}|🧩 Buy Proxy|🛒 30 Days Proxy|"
+            "Proxy Basic|✅ Confirm`"
+        )
+    else:
+        fields = "`key|emoji|Full Name|বাংলা success message|English success message`"
+        extra = (
+            "\n\nউদাহরণ:\n"
+            f"`{delivery_type}|📦|Buy {delivery_type.title()}|"
+            "✅ {product} ready!|✅ {product} ready!`"
+        )
+
+    msg = bot.send_message(
+        ADMIN_ID,
+        f"✅ Type: {delivery_type}\n\n"
+        "এখন এক লাইনে লিখুন:\n"
+        f"{fields}"
+        f"{extra}\n\n"
+        "Placeholder: {product} {duration} {qty} {total} {order_id} "
+        "{balance} {time} {delivery} {credentials}\n"
+        "নোট: Message-এর ভিতরে `|` ব্যবহার করবেন না।",
+    )
+    bot.register_next_step_handler(msg, cat_add_save, delivery_type)
+
+
+def cat_add_save(message, selected_delivery_type=None):
     if message.chat.id != ADMIN_ID: return
     try:
         parts = message.text.strip().split("|")
-        if len(parts) == 3:
+        # নতুন wizard format: type আগে button থেকে নির্বাচিত হয়েছে।
+        if selected_delivery_type:
+            if selected_delivery_type == "supplier":
+                if len(parts) < 5:
+                    raise ValueError("missing category fields")
+                key, emoji, name, bn_msg, en_msg = (
+                    part.strip() for part in parts[:5]
+                )
+                delivery_type = selected_delivery_type
+                supplier_button = parts[5].strip() if len(parts) > 5 else ""
+                duration_button = parts[6].strip() if len(parts) > 6 else ""
+                product_button = parts[7].strip() if len(parts) > 7 else ""
+                confirm_button = parts[8].strip() if len(parts) > 8 else ""
+            else:
+                if len(parts) < 5:
+                    raise ValueError("missing category fields")
+                key, emoji, name, bn_msg, en_msg = (
+                    part.strip() for part in parts[:5]
+                )
+                delivery_type = selected_delivery_type
+                supplier_button = duration_button = product_button = confirm_button = ""
+        elif len(parts) == 3:
             key, emoji, name = (part.strip() for part in parts)
             delivery_type, bn_msg, en_msg = "stock", "", ""
             supplier_button, duration_button, product_button, confirm_button = "", "", "", ""
@@ -6337,8 +6405,8 @@ def cat_add_save(message):
     except Exception:
         bot.send_message(
             ADMIN_ID,
-            "❌ ভুল format। `key|emoji|Full Name|stock/manual/supplier|বাংলা message|English message|Supplier category button|Duration button|Product button|Confirm button` ব্যবহার করুন।",
-            parse_mode="Markdown",
+            "❌ তথ্যের format সঠিক নয়।\n"
+            "আবার Category Management → Add Category চাপুন এবং দেখানো অপশন অনুসরণ করুন।",
         )
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("cat_settings|"))
